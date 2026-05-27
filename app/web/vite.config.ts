@@ -16,11 +16,15 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/scoreboard': 'http://localhost:8000',
-      '/retrieve': 'http://localhost:8000',
-      '/query': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
-      '/config': 'http://localhost:8000',
+      // All FastAPI endpoints are now reached via /api/* in unified-serve
+      // mode (where FastAPI's StaticFiles fallback at / serves the SPA on
+      // unknown paths). The single /api proxy forwards everything; future
+      // API endpoints don't need to be added here per-path. Existing API
+      // endpoints (/retrieve, /query, /health, /config) currently stay at
+      // their root paths in this packet — their migration under /api/* will
+      // land in the packet that wires the matching React routes (e.g. P0-C
+      // bringing /config and /compare React routes online).
+      '/api': 'http://localhost:8000',
     },
   },
   test: {
