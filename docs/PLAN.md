@@ -748,12 +748,15 @@ comparison views outgrew Streamlit's primitive surface):
 * **Heatmaps**: small canvas or `@nivo/heatmap` for the ColBERT MaxSim
   matrix (P2+).
 
-**Backend coupling**: the React app is served at runtime by FastAPI
-when `RAG_WEB_DIST_PATH` env var is set to `app/web/dist/`. In dev,
-`npm run dev` runs Vite at port 5173 with proxy to FastAPI on 8000.
-For one-command demo from a clean clone: `docker compose up qdrant &&
-cd app/web && npm install && npm run build && RAG_WEB_DIST_PATH=app/web/dist
-uv run uvicorn app.api.main:app`.
+**Backend coupling** *(planned; lands as VOI-247 P0-D — until that
+packet merges, `app/web/` and the FastAPI `GET /scoreboard` +
+StaticFiles mount do not exist on `main`)*: the React app will be
+served at runtime by FastAPI when `RAG_WEB_DIST_PATH` env var is set
+to `app/web/dist/`. In dev, `npm run dev` runs Vite at port 5173 with
+proxy to FastAPI on 8000. For one-command demo from a clean clone
+(post-VOI-247): `docker compose up qdrant && cd app/web && npm install
+&& npm run build && RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn
+app.api.main:app`.
 
 **Pages** (routes; each lands in its phase's packet):
 
