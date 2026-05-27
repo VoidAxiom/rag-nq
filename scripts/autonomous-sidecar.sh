@@ -115,12 +115,20 @@ if [ -f "$MARKER" ]; then
   fi
 fi
 
-# ── tick header + mantra (8 lines) ──
+# ── tick header + mantra ──
+# Mirrors CLAUDE.md §"Autonomous mode" → "The mantra" verbatim so the
+# operating sidecar tick is the source-of-truth for the loop's discipline.
 echo "=== AUTONOMOUS sidecar tick @ $(date +%H:%M:%S) ==="
-echo "mantra: ACT, DON'T NARRATE. Idle = failure to act."
+echo "mantra: You deliver a working LIVE PRODUCT, not code. A merged PR is not"
+echo "  the deliverable; the artifact running on primary at spec scale producing"
+echo "  the measurable outcome IS the deliverable."
+echo "  ACT, DON'T NARRATE. Every stall is a failure to act."
 echo "  · Impl silent → TaskList check; alive=wait, dead=re-dispatch"
 echo "  · Codex 👀'd → wait verdict; not 👀'd & >2min → re-trigger"
-echo "  · PR clean → merge; queue has next → dispatch; nothing actionable → end turn"
+echo "  · PR clean → final-head mechanical re-gate → squash-merge → pull main →"
+echo "    live-verify on primary against the merged-in code → re-open on mismatch"
+echo "  · Queue has next → dispatch (ONLY after current packet's live-on-primary passes)"
+echo "  · Genuinely external-blocked & nothing pending → end turn cleanly"
 echo
 
 # ── primary (1 line) ──
@@ -338,13 +346,13 @@ except Exception:
         decision="ACT-NOW: head-pinned CLEAN on PR head — but worktree is local-ahead (unpushed). Push first, then re-gate"
         actions_now=$((actions_now+1))
       elif echo "$gate" | grep -q 'CLEAN ('; then
-        decision="ACT-NOW: head-pinned CLEAN — merge"
+        decision="ACT-NOW: head-pinned CLEAN — final-head mechanical re-gate → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
         actions_now=$((actions_now+1))
       elif echo "$gate" | grep -q 'CLEAN-COMMENT-MANUAL' && [ "$pushed" = "local-ahead" ]; then
         decision="ACT-NOW: CLEAN-COMMENT-MANUAL on PR head — but worktree is local-ahead (unpushed). Push first, then re-judge timeline + re-gate"
         actions_now=$((actions_now+1))
       elif echo "$gate" | grep -q 'CLEAN-COMMENT-MANUAL'; then
-        decision="ACT-NOW: CLEAN-COMMENT-MANUAL — judge timeline + merge"
+        decision="ACT-NOW: CLEAN-COMMENT-MANUAL — judge timeline (clean comment must post-date current head) → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
         actions_now=$((actions_now+1))
       elif [ "$threads_open" -gt 0 ]; then
         # FINDINGS arrived (threads_open > 0 IS terminal per review-gate.sh
@@ -511,10 +519,10 @@ except Exception:
     #   change directly, which violates the cardinal rule) — spawn a
     #   fresh impl for the fix and stop hand-editing impl-scope files.
     if echo "$gate" | grep -q 'CLEAN ('; then
-      decision="ACT-NOW [$owner]: head-pinned CLEAN — merge (final-head re-gate first)"
+      decision="ACT-NOW [$owner]: head-pinned CLEAN — final-head mechanical re-gate → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
       actions_now=$((actions_now+1))
     elif echo "$gate" | grep -q 'CLEAN-COMMENT-MANUAL'; then
-      decision="ACT-NOW [$owner]: CLEAN-COMMENT-MANUAL — judge timeline (push < @codex review < clean comment) + merge"
+      decision="ACT-NOW [$owner]: CLEAN-COMMENT-MANUAL — judge timeline (push < @codex review < clean comment) → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
       actions_now=$((actions_now+1))
     elif [ "$threads_open" -gt 0 ]; then
       if [ "$owner" = "claude" ]; then
