@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from app.api.schemas import (
     ArtifactStatus,
@@ -22,6 +25,7 @@ from app.api.schemas import (
     RuntimeConfigResponse,
 )
 from src.config.settings import Settings
+from src.evaluation.scoreboard import SCOREBOARD_PATH, Scoreboard, load_scoreboard
 from src.generation.grounded import GroundedGenerator
 from src.models.query_schemas import (
     GroundedAnswer,
@@ -53,6 +57,7 @@ class ApiGenerator(Protocol):
 
 RetrieverFactory = Callable[[Settings, Mode], ApiRetriever]
 GeneratorFactory = Callable[[Settings], ApiGenerator]
+ScoreboardPathFactory = Callable[[], Path]
 
 
 def create_app(
@@ -60,6 +65,7 @@ def create_app(
     settings: Settings | None = None,
     retriever_factory: RetrieverFactory | None = None,
     generator_factory: GeneratorFactory | None = None,
+    scoreboard_path_factory: ScoreboardPathFactory | None = None,
 ) -> FastAPI:
     """Build the HTTP app with injectable dependencies for tests."""
 
@@ -74,9 +80,14 @@ def create_app(
         description="Local API for retrieval diagnostics and grounded RAG queries.",
     )
 
-    @app.get("/", response_model=RootResponse)
-    def root() -> RootResponse:
-        return RootResponse()
+    dist_path_env = os.environ.get("RAG_WEB_DIST_PATH")
+    dist_path = Path(dist_path_env).expanduser().resolve() if dist_path_env else None
+    spa_enabled = dist_path is not None and dist_path.is_dir()
+
+    if not spa_enabled:
+        @app.get("/", response_model=RootResponse)
+        def root() -> RootResponse:
+            return RootResponse()
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -131,6 +142,42 @@ def create_app(
             LOGGER.exception("grounded generation failed")
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return retrieval_response.model_copy(update={"grounded": grounded})
+
+    @app.get("/api/scoreboard", response_model=Scoreboard)
+    def scoreboard() -> Scoreboard:
+        path = scoreboard_path_factory() if scoreboard_path_factory else SCOREBOARD_PATH
+        return load_scoreboard(path)
+
+    if spa_enabled and dist_path is not None:
+        assets_path = dist_path / "assets"
+        if assets_path.is_dir():
+            app.mount(
+                "/assets",
+                StaticFiles(directory=assets_path),
+                name="web-assets",
+            )
+
+        @app.get(
+            "/{full_path:path}",
+            include_in_schema=False,
+            response_model=None,
+        )
+        def web_app(full_path: str) -> FileResponse | Response:
+            if full_path.startswith("api/"):
+                return Response(status_code=404)
+            if full_path.startswith("assets/"):
+                return Response(status_code=404)
+
+            requested_path = (dist_path / full_path).resolve()
+            if requested_path != dist_path and dist_path not in requested_path.parents:
+                return Response(status_code=404)
+            if requested_path.is_file():
+                return FileResponse(requested_path)
+
+            index_path = dist_path / "index.html"
+            if index_path.is_file():
+                return FileResponse(index_path, media_type="text/html")
+            return Response(status_code=404)
 
     return app
 
