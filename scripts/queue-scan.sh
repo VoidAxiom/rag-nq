@@ -93,13 +93,15 @@ title_of() {
 
 # ---- Detect merged + dispatched state -------------------------------------
 
-# Merged: VOI-N IDs in commit bodies (full %B) on origin/main (or local
-# main if origin/main is missing). Per CLAUDE.md the squash-merge subject
-# is the conventional commit title (no VOI token) and `Closes VOI-N` lives
-# in the PR body, which `gh pr merge --squash` carries into the merge
-# commit body. Using %B (subject + body) catches both forms; %s (subject
-# only) misses the Closes-VOI trailer and lets already-merged packets
-# appear as dispatchable. Tolerates either ref existing.
+# Merged: VOI-N IDs from CLOSING TRAILERS in commit bodies (full %B) on
+# origin/main (or local main if origin/main is missing). Per CLAUDE.md the
+# squash-merge subject is the conventional commit title (no VOI token) and
+# `Closes VOI-N` lives in the PR body, which `gh pr merge --squash` carries
+# into the merge commit body. We match GitHub's close-keyword grammar
+# (close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved, case-
+# insensitive) rather than ANY `VOI-N` mention — a body that REFERENCES a
+# VOI (e.g. "see VOI-243") without closing it must NOT mark that packet
+# merged. Tolerates either ref existing.
 if git rev-parse --verify --quiet origin/main >/dev/null; then
   MAIN_REF=origin/main
 else
@@ -107,7 +109,10 @@ else
 fi
 
 MERGED_TOKENS=" $(git log "$MAIN_REF" --pretty=format:'%B' 2>/dev/null \
-                  | grep -oE 'VOI-[0-9]+' | sort -u | tr '\n' ' ') "
+                  | python3 -c '
+import re, sys
+toks = set(re.findall(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(VOI-[0-9]+)\b", sys.stdin.read(), re.IGNORECASE))
+print(" ".join(sorted(toks)))' 2>/dev/null) "
 
 # Dispatched: `sk/voi-<n>-...` branches that exist locally OR on origin.
 # Anchored regex: `^sk/voi-N` (CLAUDE.md branch convention) — stray refs

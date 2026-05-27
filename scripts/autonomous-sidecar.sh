@@ -164,9 +164,17 @@ if [ -n "$prev_main_sha" ] && [ "$prev_main_sha" != "$cur_main_sha" ]; then
       full_sha=${line:0:40}
       subject=${line:41}
       pr_num=$(echo "$subject" | grep -oE '\(#[0-9]+\)' | tr -d '(#)' | head -1)
-      # Scan the full commit body (%B) for VOI tokens; %s alone misses
-      # `Closes VOI-N` trailers carried into the squash-merge body.
-      voi_num=$(git -C "$REPO" log -1 --pretty='%B' "$full_sha" 2>/dev/null | grep -oE 'VOI-[0-9]+' | head -1)
+      # Scan the full commit body (%B) for a closing VOI trailer; %s
+      # alone misses `Closes VOI-N` trailers carried into the squash-
+      # merge body, but a bare `VOI-N` mention in the body is NOT a
+      # closure (PRs sometimes reference VOI-243 as the Command-Center
+      # anchor without closing it). Match GitHub's close-keyword set
+      # (close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved,
+      # case-insensitive) so we don't false-positive on stale mentions.
+      voi_num=$(git -C "$REPO" log -1 --pretty='%B' "$full_sha" 2>/dev/null | python3 -c '
+import re, sys
+m = re.search(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(VOI-[0-9]+)\b", sys.stdin.read(), re.IGNORECASE)
+print(m.group(1) if m else "")' 2>/dev/null)
       echo "  + $sha PR#${pr_num:-?} ${voi_num:-?}: $(echo "$subject" | cut -c1-60)"
       saw_merge="yes"
       [ -n "$voi_num" ] && merged_voi_list="$merged_voi_list $voi_num"
