@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 from src.config.settings import Settings
 from src.evaluation.baseline_runner import run_baseline
 from src.evaluation.scoreboard import SCOREBOARD_PATH
+from src.ingestion.chunk_raw import load_chunk_manifest
 from src.observability.logging_setup import setup_logging
 
 
@@ -98,24 +100,43 @@ def main() -> None:
             default="dev",
             help=(
                 "Dataset split label for the scoreboard row. Must equal "
-                "settings.dataset_split (the split the corpus index was built from). "
+                "the persisted chunk manifest split (the split the corpus index "
+                "was built from). "
                 "Default 'dev' matches the canonical NQ-dev baseline run; "
-                "if settings.dataset_split differs, the CLI errors out."
+                "set RAG_DATASET_SPLIT before rebuilding artifacts for another split."
             ),
         )
         args = parser.parse_args()
 
         settings = Settings.from_env()
-        if args.split != settings.dataset_split:
+        chunk_manifest = load_chunk_manifest(settings.chunk_manifest_path)
+        if chunk_manifest is None:
             parser.error(
-                f"--split={args.split!r} does not match "
-                f"settings.dataset_split={settings.dataset_split!r}; "
-                f"the corpus indexed at {settings.index_chunks_path} was built from the "
-                f"{settings.dataset_split!r} split. Either re-build the index against the "
-                f"{args.split!r} split, set DATASET_SPLIT={args.split} in the env, or pass "
-                f"--split={settings.dataset_split} to label the row truthfully."
+                f"No chunk manifest found at {settings.chunk_manifest_path}; "
+                f"run `uv run python -m src.scripts.build_indexes` first so the "
+                f"corpus split can be validated against the scoreboard row label."
             )
-        print(f"Validated split={args.split} matches settings.dataset_split")
+
+        persisted_split = chunk_manifest.dataset_split
+        if args.split != persisted_split:
+            parser.error(
+                f"--split={args.split!r} does not match the persisted chunk manifest "
+                f"split={persisted_split!r} at {settings.chunk_manifest_path}. "
+                f"The corpus indexed at {settings.index_chunks_path} was built from "
+                f"the {persisted_split!r} split. Either re-build the index against "
+                f"the {args.split!r} split (e.g. RAG_DATASET_SPLIT={args.split} "
+                f"uv run python -m src.scripts.build_indexes), or pass "
+                f"--split={persisted_split} to label the row truthfully."
+            )
+        if settings.dataset_split != persisted_split:
+            print(
+                f"WARNING: settings.dataset_split={settings.dataset_split!r} differs "
+                f"from persisted chunk manifest split={persisted_split!r}; the "
+                f"corpus on disk (and the scoreboard row label) reflects "
+                f"{persisted_split!r}.",
+                file=sys.stderr,
+            )
+        print(f"Validated split={args.split} matches persisted chunk manifest split")
         report, row = run_baseline(
             settings,
             max_queries=args.max_queries,

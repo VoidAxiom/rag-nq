@@ -18,6 +18,7 @@ from src.evaluation.retrieval_eval import (
     RetrievalEvalReport,
 )
 from src.evaluation.scoreboard import load_scoreboard
+from src.ingestion.models import ChunkManifest
 from src.retrieval.qdrant_retrievers import Mode
 
 
@@ -111,6 +112,10 @@ def test_cli_validates_split_matches_settings_dataset_split(
         classmethod(lambda cls: cls(dataset_split="train")),
     )
     monkeypatch.setattr(
+        "src.scripts.eval_p0_baseline.load_chunk_manifest",
+        lambda _path: _build_chunk_manifest(dataset_split="train"),
+    )
+    monkeypatch.setattr(
         sys,
         "argv",
         [
@@ -132,6 +137,79 @@ def test_cli_validates_split_matches_settings_dataset_split(
     stderr = capsys.readouterr().err
     assert "dev" in stderr
     assert "train" in stderr
+
+
+def test_cli_validates_split_matches_persisted_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(lambda cls: cls(dataset_split="dev")),
+    )
+    monkeypatch.setattr(
+        "src.scripts.eval_p0_baseline.load_chunk_manifest",
+        lambda _path: _build_chunk_manifest(dataset_split="train"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(tmp_path / "eval.json"),
+            "--split",
+            "dev",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    with pytest.raises(SystemExit):
+        main()
+
+    stderr = capsys.readouterr().err
+    assert "dev" in stderr
+    assert "train" in stderr
+    assert "RAG_DATASET_SPLIT" in stderr
+
+
+def test_cli_no_chunk_manifest_errors_with_build_indexes_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(lambda cls: cls(dataset_split="dev")),
+    )
+    monkeypatch.setattr(
+        "src.scripts.eval_p0_baseline.load_chunk_manifest",
+        lambda _path: None,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(tmp_path / "eval.json"),
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert "build_indexes" in capsys.readouterr().err
 
 
 def test_cli_accepts_matching_split(
@@ -164,6 +242,48 @@ def test_cli_accepts_matching_split(
     scoreboard = load_scoreboard(scoreboard_path)
     assert len(scoreboard.rows) == 1
     assert scoreboard.rows[0].split == "train"
+
+
+def test_cli_warns_if_settings_split_differs_from_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_report = _build_fake_report()
+    output_path = tmp_path / "eval.json"
+    scoreboard_path = tmp_path / "scoreboard.json"
+    _patch_cli_dependencies(
+        monkeypatch,
+        fake_report,
+        dataset_split="dev",
+        persisted_split="train",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(output_path),
+            "--scoreboard",
+            str(scoreboard_path),
+            "--split",
+            "train",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    main()
+
+    scoreboard = load_scoreboard(scoreboard_path)
+    assert len(scoreboard.rows) == 1
+    assert scoreboard.rows[0].split == "train"
+    stderr = capsys.readouterr().err
+    assert "WARNING: settings.dataset_split='dev' differs" in stderr
+    assert "persisted chunk manifest split='train'" in stderr
 
 
 def test_cli_no_append_scoreboard_flag_skips_append(
@@ -283,8 +403,10 @@ def _patch_cli_dependencies(
     fake_report: RetrievalEvalReport,
     *,
     dataset_split: str = "dev",
+    persisted_split: str | None = None,
 ) -> dict[str, Any]:
     captured: dict[str, Any] = {}
+    manifest_split = dataset_split if persisted_split is None else persisted_split
 
     def fake_run_retrieval_evaluation(*args: Any, **kwargs: Any) -> RetrievalEvalReport:
         output_path = kwargs["output_path"]
@@ -330,7 +452,24 @@ def _patch_cli_dependencies(
         "from_env",
         classmethod(lambda cls: cls(dataset_split=dataset_split)),
     )
+    monkeypatch.setattr(
+        "src.scripts.eval_p0_baseline.load_chunk_manifest",
+        lambda _path: _build_chunk_manifest(dataset_split=manifest_split),
+    )
     return captured
+
+
+def _build_chunk_manifest(dataset_split: str = "dev") -> ChunkManifest:
+    return ChunkManifest(
+        schema_version="test-chunk-manifest",
+        chunk_schema_version="test-index-chunk",
+        dataset_name="sentence-transformers/NQ-retrieval",
+        dataset_split=dataset_split,
+        line_count=1,
+        raw_schema_version="test-raw-dataset",
+        raw_row_count=1,
+        created_at_utc="2026-01-01T00:00:00Z",
+    )
 
 
 def _build_fake_report(
