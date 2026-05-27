@@ -44,6 +44,24 @@ def test_add_row_roundtrip(tmp_path: Path) -> None:
     _assert_utc(scoreboard.generated_at)
 
 
+def test_retrieval_only_row_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "scoreboard.json"
+    row = _sample_row(
+        phase="P0",
+        pipeline="retrieval-only",
+        benchmark="nq",
+        split="dev",
+        notes="retrieval baseline",
+    ).model_copy(update={"answer_metrics": None, "quality_metrics": None})
+
+    add_row(row, path)
+    scoreboard = load_scoreboard(path)
+
+    assert scoreboard.rows == [row]
+    assert scoreboard.rows[0].answer_metrics is None
+    assert scoreboard.rows[0].quality_metrics is None
+
+
 def test_add_row_appends_not_replaces(tmp_path: Path) -> None:
     path = tmp_path / "scoreboard.json"
     row_a = _sample_row(phase="P3", commit_sha="abcdef1234567890", notes="first")

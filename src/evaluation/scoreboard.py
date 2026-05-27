@@ -76,8 +76,8 @@ class ScoreboardRow(BaseModel):
     benchmark: str
     split: str
     retriever_metrics: RetrieverMetrics
-    answer_metrics: AnswerMetrics
-    quality_metrics: QualityMetrics
+    answer_metrics: AnswerMetrics | None = None
+    quality_metrics: QualityMetrics | None = None
     latency_ms: LatencyMs
     models: ModelSet
     commit_sha: str
