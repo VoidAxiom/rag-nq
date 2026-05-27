@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import math
+import re
 import subprocess
 import time
 from pathlib import Path
 
 from src.config.settings import Settings
 from src.evaluation.retrieval_eval import (
+    EvalCase,
     RelevanceContract,
     RetrievalEvalReport,
+    build_eval_cases_from_index_artifact,
     run_retrieval_evaluation,
 )
 from src.evaluation.scoreboard import (
@@ -19,7 +24,7 @@ from src.evaluation.scoreboard import (
     ScoreboardRow,
     add_row,
 )
-from src.retrieval.qdrant_retrievers import Mode
+from src.retrieval.qdrant_retrievers import Mode, QdrantModeRetriever
 
 
 def build_scoreboard_row_from_eval(
@@ -90,7 +95,86 @@ def resolve_commit_sha(repo_root: Path | None = None) -> str:
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         raise RuntimeError(f"failed to resolve commit sha: {e}") from e
-    return proc.stdout.strip()
+    sha = proc.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError(
+            "git rev-parse HEAD returned unexpected output "
+            f"(not a 40-char hex sha): {sha!r}"
+        )
+    return sha
+
+
+def _measure_latency_sample_ms(
+    settings: Settings,
+    *,
+    report: RetrievalEvalReport,
+    primary_mode: Mode,
+    top_k: int,
+    max_queries: int,
+    latency_sample_size: int,
+) -> list[float]:
+    """Return timed retrieval latencies from a prefix sample.
+
+    latency_sample_size: Upper bound on number of timed retrievals for p50/p95
+        capture. One additional case is consumed as a warm-up call (whose timing
+        is discarded), so the actual timed sample size is at most
+        min(latency_sample_size, query_count - 1). If query_count <= 1 or
+        latency_sample_size == 0, no latency capture is performed
+        (returns []).
+    """
+    case_limit = min(
+        latency_sample_size + 1,
+        max_queries + 1,
+        report.run_config.query_count,
+    )
+    if latency_sample_size <= 0 or case_limit < 2:
+        return []
+
+    cases = build_eval_cases_from_index_artifact(
+        Path(report.run_config.corpus_path),
+        max_queries=case_limit,
+    )
+    return _time_retrieval_cases_ms(
+        settings,
+        cases=cases,
+        primary_mode=primary_mode,
+        top_k=top_k,
+    )
+
+
+def _time_retrieval_cases_ms(
+    settings: Settings,
+    *,
+    cases: list[EvalCase],
+    primary_mode: Mode,
+    top_k: int,
+) -> list[float]:
+    if not cases:
+        return []
+
+    retriever = QdrantModeRetriever(settings=settings, mode=primary_mode)
+    # Warm-up: first retrieve() of a fresh retriever lazily loads
+    # embedder/sub-retrievers -- bias would inflate p95. Discard.
+    retriever.retrieve(cases[0].query, top_k=top_k)
+
+    latencies_ms: list[float] = []
+    for case in cases[1:]:
+        started_at = time.perf_counter()
+        retriever.retrieve(case.query, top_k=top_k)
+        latencies_ms.append((time.perf_counter() - started_at) * 1000.0)
+    return latencies_ms
+
+
+def _latency_percentiles_ms(latencies_ms: list[float]) -> LatencyMs:
+    if not latencies_ms:
+        return LatencyMs(p50=0, p95=0)
+    sorted_latencies = sorted(latencies_ms)
+    latency_count = len(sorted_latencies)
+    p50_index = max(0, min(latency_count - 1, math.ceil(0.50 * latency_count) - 1))
+    p95_index = max(0, min(latency_count - 1, math.ceil(0.95 * latency_count) - 1))
+    p50 = sorted_latencies[p50_index]
+    p95 = sorted_latencies[p95_index]
+    return LatencyMs(p50=int(round(p50)), p95=int(round(p95)))
 
 
 def run_baseline(
@@ -109,7 +193,17 @@ def run_baseline(
     relevance_contract: RelevanceContract = "answer_overlap",
     notes: str | None = None,
     commit_sha: str | None = None,
+    latency_sample_size: int = 50,
 ) -> tuple[RetrievalEvalReport, ScoreboardRow]:
+    """Run retrieval evaluation and append a scoreboard row.
+
+    latency_sample_size: Upper bound on number of timed retrievals for p50/p95
+        capture. One additional case is consumed as a warm-up call (whose timing
+        is discarded), so the actual timed sample size is at most
+        min(latency_sample_size, query_count - 1). If query_count <= 1 or
+        latency_sample_size == 0, no latency capture is performed
+        (returns p50=p95=0).
+    """
     if not {1, 5, 10}.issubset(k_values):
         raise ValueError(f"k_values must include 1, 5, 10 (got {k_values})")
     if not modes:
@@ -117,8 +211,8 @@ def run_baseline(
     resolved_primary_mode = primary_mode or modes[0]
     if resolved_primary_mode not in modes:
         raise ValueError(f"primary_mode {resolved_primary_mode!r} not in modes={modes}")
+    sha = commit_sha if commit_sha is not None else resolve_commit_sha()
 
-    start = time.perf_counter()
     report = run_retrieval_evaluation(
         settings,
         k_values=k_values,
@@ -127,25 +221,45 @@ def run_baseline(
         max_queries=max_queries,
         output_path=output_path,
     )
-    elapsed_s = time.perf_counter() - start
 
-    query_count = report.run_config.query_count
-    if query_count == 0:
-        mean_ms = 0
-    else:
-        mean_ms = int(round((elapsed_s * 1000.0) / query_count))
-    latency_ms = LatencyMs(p50=mean_ms, p95=mean_ms)
+    top_k = max(k_values)
+    latency_sample_failure: str | None = None
+    try:
+        latencies_ms = _measure_latency_sample_ms(
+            settings,
+            report=report,
+            primary_mode=resolved_primary_mode,
+            top_k=top_k,
+            max_queries=max_queries,
+            latency_sample_size=latency_sample_size,
+        )
+        latency_ms = _latency_percentiles_ms(latencies_ms)
+    except (RuntimeError, OSError, ConnectionError, KeyError) as exc:
+        logging.getLogger(__name__).warning(
+            "latency sample failed: %s; falling back to LatencyMs(0,0)",
+            exc,
+            exc_info=True,
+        )
+        latencies_ms = []
+        latency_ms = LatencyMs(p50=0, p95=0)
+        latency_sample_failure = f"latency_sample_failed={exc.__class__.__name__}"
     models = ModelSet(
         embedder=settings.embedder_name,
         reranker=settings.rerank_model_name,
         reasoning_llm=None,
         verifier=None,
     )
-    sha = commit_sha if commit_sha is not None else resolve_commit_sha()
-    latency_note = (
-        f"latency=mean-per-query approximation ({mean_ms} ms over {query_count} queries, "
-        f"total {elapsed_s:.3f}s); per-query histogram not captured in this baseline runner."
+    latency_sample_detail = (
+        f"timed sample = {len(latencies_ms)} queries after a discarded warm-up call"
+        if latencies_ms
+        else "no latency capture performed"
     )
+    latency_note = (
+        f"latency_p50_p95_from_prefix_sample={len(latencies_ms)}_queries "
+        f"({latency_sample_detail}; separate timing pass from eval)"
+    )
+    if latency_sample_failure is not None:
+        latency_note = f"{latency_note}; {latency_sample_failure}"
     stripped_notes = (notes or "").strip()
     combined_notes = (
         latency_note if not stripped_notes else f"{stripped_notes}; {latency_note}"

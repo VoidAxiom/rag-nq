@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 
 from src.config.settings import Settings
 from src.evaluation.retrieval_eval import (
+    EvalCase,
     EvalRunConfig,
     MetricAtK,
     ModeMetricSummary,
@@ -25,7 +27,7 @@ def test_cli_writes_eval_and_appends_scoreboard(
     fake_report = _build_fake_report()
     output_path = tmp_path / "eval.json"
     scoreboard_path = tmp_path / "scoreboard.json"
-    _patch_cli_dependencies(monkeypatch, fake_report)
+    captured = _patch_cli_dependencies(monkeypatch, fake_report)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -37,6 +39,8 @@ def test_cli_writes_eval_and_appends_scoreboard(
             str(output_path),
             "--scoreboard",
             str(scoreboard_path),
+            "--latency-sample-size",
+            "3",
         ],
     )
 
@@ -49,6 +53,7 @@ def test_cli_writes_eval_and_appends_scoreboard(
     scoreboard = load_scoreboard(scoreboard_path)
     assert len(scoreboard.rows) == 1
     assert scoreboard.rows[0].retriever_metrics.recall_at_10 == 0.8
+    assert captured["latency_sample_max_queries"] == 4
     stdout = capsys.readouterr().out
     assert (
         f"Wrote retrieval eval report to {output_path} for 10 queries "
@@ -90,6 +95,39 @@ def test_cli_no_append_scoreboard_flag_skips_append(
     assert "Appended scoreboard row" not in stdout
 
 
+def test_cli_restores_dependency_logger_levels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_report = _build_fake_report()
+    output_path = tmp_path / "eval.json"
+    _patch_cli_dependencies(monkeypatch, fake_report)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(output_path),
+            "--no-append-scoreboard",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    httpx_logger = logging.getLogger("httpx")
+    original_level = httpx_logger.level
+    httpx_logger.setLevel(logging.DEBUG)
+    try:
+        main()
+        assert httpx_logger.level == logging.DEBUG
+    finally:
+        httpx_logger.setLevel(original_level)
+
+    assert "Wrote retrieval eval report" in capsys.readouterr().out
+
+
 def test_cli_rejects_non_positive_max_queries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -116,13 +154,31 @@ def test_cli_rejects_non_positive_max_queries(
 def _patch_cli_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     fake_report: RetrievalEvalReport,
-) -> None:
+) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+
     def fake_run_retrieval_evaluation(*args: Any, **kwargs: Any) -> RetrievalEvalReport:
         output_path = kwargs["output_path"]
         assert isinstance(output_path, Path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(fake_report.model_dump_json(), encoding="utf-8")
         return fake_report
+
+    def fake_build_eval_cases_from_index_artifact(
+        _index_path: Path,
+        *,
+        max_queries: int | None,
+        **_kwargs: Any,
+    ) -> list[EvalCase]:
+        captured["latency_sample_max_queries"] = max_queries
+        return [
+            EvalCase(query=f"latency-query-{index}")
+            for index in range(max_queries if max_queries is not None else 0)
+        ]
+
+    def fake_retrieve(_self: object, _query: str, top_k: int) -> list[Any]:
+        captured["latency_top_k"] = top_k
+        return []
 
     monkeypatch.setattr(
         "src.evaluation.baseline_runner.run_retrieval_evaluation",
@@ -132,7 +188,16 @@ def _patch_cli_dependencies(
         "src.evaluation.baseline_runner.resolve_commit_sha",
         lambda repo_root=None: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
     )
+    monkeypatch.setattr(
+        "src.evaluation.baseline_runner.build_eval_cases_from_index_artifact",
+        fake_build_eval_cases_from_index_artifact,
+    )
+    monkeypatch.setattr(
+        "src.evaluation.baseline_runner.QdrantModeRetriever.retrieve",
+        fake_retrieve,
+    )
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: cls()))
+    return captured
 
 
 def _build_fake_report(
