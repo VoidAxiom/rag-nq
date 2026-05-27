@@ -31,7 +31,7 @@ class Settings(BaseModel):
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_retrieval_timeout_seconds: float = Field(default=15.0, gt=0)
-    qdrant_collection: str = "nq_passages"
+    qdrant_collection: str = "nq_passages_qwen3_embed_4b"
     qdrant_vector_name: str = "dense"
     qdrant_sparse_vector_name: str = "sparse"
     qdrant_distance: Literal["Cosine", "Dot", "Euclid", "Manhattan"] = "Cosine"
