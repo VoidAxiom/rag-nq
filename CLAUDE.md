@@ -203,10 +203,15 @@ Each sidecar tick, Claude:
      the unresolved threads (read them via `review-gate.sh threads <PR>`).
    - "PR #N has `CLEAN-COMMENT-MANUAL`" → judge head-pin via the
      standing framework (clean comment must post-date the head push);
-     if it does, run final-head re-gate + **live-verify on primary** +
-     squash-merge.
-   - "PR #N has head-pinned `REVIEWED-CLEAN`" → final-head re-gate +
-     **live-verify on primary** + squash-merge.
+     if it does, run final-head mechanical re-gate (scope check +
+     audit-trail + `mss=CLEAN`) → `gh pr merge --squash --delete-branch`
+     → `git checkout main && git pull --ff-only origin main` →
+     live-verify on primary against the merged main → if mismatch,
+     re-open the packet + dispatch a fix impl (see also
+     "PR #N merged but live-on-primary not yet measured" below).
+   - "PR #N has head-pinned `REVIEWED-CLEAN`" → same ordering: final-
+     head mechanical re-gate → squash-merge → pull main → live-verify
+     on the merged-in code → re-open on mismatch.
    - "Worktree X has committed-but-unpushed commit(s)" → impl notify-
      done likely never arrived (agent stalled). Run the pre-PR gate
      directly; if clean, re-dispatch impl to do push + PR + wait.
@@ -261,10 +266,16 @@ verification is SUFFICIENT. Merge happens at AND, not OR.
   embedder) → drop the collection, re-create with the new schema,
   re-index from the persisted JSONL artifacts. Live data on primary
   is dev-only and never load-bearing.
-- HF model weights download stalls / fails → retry once with a clean
-  cache (`rm -rf ~/.cache/huggingface/hub/<model-id>`); if it still
-  fails, document the live-network failure in the impl's notify-done
-  and Claude follows up post-merge on primary.
+- HF model weights download stalls / fails → retry once via
+  `huggingface_hub.snapshot_download(..., force_download=True)` which
+  re-fetches without touching the existing cache; if that still fails,
+  non-destructively quarantine the model's cache subdir by RENAMING it
+  (`mv ~/.cache/huggingface/hub/<model-id> ~/.cache/huggingface/hub/<model-id>.quarantined-<epoch>`)
+  and retry. **NEVER** `rm -rf` the HF cache — that contradicts the
+  autonomy boundary above and risks destroying weights the system was
+  using. If the rename+retry path still fails, document the live-network
+  failure in the impl's notify-done and Claude follows up post-merge on
+  primary.
 - Genuinely-blocking unknown (no precedent in this CLAUDE.md, an
   ambiguous Linear MCP error, an unexpected codex finding requiring
   a real spec decision Claude can't make from research alone) →
