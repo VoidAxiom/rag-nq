@@ -124,7 +124,7 @@ echo "  the deliverable; the artifact running on primary at spec scale producing
 echo "  the measurable outcome IS the deliverable."
 echo "  ACT, DON'T NARRATE. Every stall is a failure to act."
 echo "  · Impl silent → TaskList check; alive=wait, dead=re-dispatch"
-echo "  · Codex 👀'd → wait verdict; not 👀'd & >2min → re-trigger"
+echo "  · Codex 👀'd → wait verdict; not 👀'd & past wait-helper's 120s ackWaitSec → review-gate.sh wait auto-retriggers; this sidecar's coarser fallback re-triggers at >${STALL_MIN}min"
 echo "  · PR clean → final-head mechanical re-gate → squash-merge → pull main →"
 echo "    live-verify on primary against the merged-in code → re-open on mismatch"
 echo "  · Queue has next → dispatch (ONLY after current packet's live-on-primary passes)"

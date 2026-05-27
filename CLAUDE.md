@@ -117,7 +117,7 @@ comment format and Claude will rule.
 > **ACT, DON'T NARRATE. Every stall is a failure to act.**
 >
 > - Impl silent → check on it (TaskList). Alive → wait. Dead → re-dispatch.
-> - Codex 👀'd → wait for verdict. Codex hasn't → re-trigger after 2 min.
+> - Codex 👀'd → wait for verdict. Codex hasn't → re-trigger. There are two layered re-trigger cadences: `scripts/review-gate.sh wait` auto-retriggers at its `ackWaitSec` (default 120 s) when it's actively driving a loop; the sidecar's coarser fallback re-triggers at `SIDECAR_STALL_MIN` (default 15 min) when no wait helper is in flight.
 > - PR clean → merge. Verdict's the user's confirmation now.
 > - **PR merged → live-verify on primary IMMEDIATELY. No exceptions.**
 >   Run the packet's "Acceptance — Runtime verification" measurable (the
