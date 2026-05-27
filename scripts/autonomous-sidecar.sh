@@ -141,16 +141,24 @@ merged_pr_list=""
 saw_merge=""
 if [ -n "$prev_main_sha" ] && [ "$prev_main_sha" != "$cur_main_sha" ]; then
   # Walk new commits oldest→newest; extract VOI-N from "Closes VOI-N" or
-  # the conventional "(#PR)" squash-merge suffix.
+  # the conventional "(#PR)" squash-merge suffix. Per the squash-merge
+  # convention the conventional commit subject is title-only (no VOI
+  # token) and `Closes VOI-N` lives in the PR body, which `gh pr merge
+  # --squash` carries into the merge commit body. Per-commit, scan
+  # %B (subject + body) for the VOI token so body-only closures are
+  # detected; the subject is still used for the display line.
   new_merges=$(git log --pretty='%H %s' "$prev_main_sha..origin/main" 2>/dev/null | head -50)
   if [ -n "$new_merges" ]; then
     echo
     echo "merged since last tick:"
     while IFS= read -r line; do
       sha=${line:0:7}
+      full_sha=${line:0:40}
       subject=${line:41}
       pr_num=$(echo "$subject" | grep -oE '\(#[0-9]+\)' | tr -d '(#)' | head -1)
-      voi_num=$(echo "$subject" | grep -oE 'VOI-[0-9]+' | head -1)
+      # Scan the full commit body (%B) for VOI tokens; %s alone misses
+      # `Closes VOI-N` trailers carried into the squash-merge body.
+      voi_num=$(git -C "$REPO" log -1 --pretty='%B' "$full_sha" 2>/dev/null | grep -oE 'VOI-[0-9]+' | head -1)
       echo "  + $sha PR#${pr_num:-?} ${voi_num:-?}: $(echo "$subject" | cut -c1-60)"
       saw_merge="yes"
       [ -n "$voi_num" ] && merged_voi_list="$merged_voi_list $voi_num"
