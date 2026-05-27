@@ -128,6 +128,17 @@ def main() -> None:
                 f"uv run python -m src.scripts.build_indexes), or pass "
                 f"--split={persisted_split} to label the row truthfully."
             )
+        if args.pipeline == "hybrid+rerank" and not settings.rerank_enabled:
+            parser.error(
+                f"--pipeline={args.pipeline!r} requires settings.rerank_enabled=True, "
+                f"but settings.rerank_enabled={settings.rerank_enabled!r}. The "
+                f"HybridQdrantRetriever would skip the reranker stage, producing "
+                f"a non-reranked retrieval whose scoreboard row would incorrectly "
+                f"claim the canonical BGE-reranked baseline. Either enable rerank "
+                f"(unset RAG_RERANK_ENABLED, or set RAG_RERANK_ENABLED=true) or "
+                f"pass a different --pipeline label that truthfully describes the "
+                f"non-reranked run (e.g. --pipeline hybrid)."
+            )
         if settings.dataset_split != persisted_split:
             print(
                 f"WARNING: settings.dataset_split={settings.dataset_split!r} differs "

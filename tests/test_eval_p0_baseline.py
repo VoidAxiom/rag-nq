@@ -244,6 +244,80 @@ def test_cli_accepts_matching_split(
     assert scoreboard.rows[0].split == "train"
 
 
+def test_cli_rejects_hybrid_plus_rerank_when_rerank_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(lambda cls: cls(rerank_enabled=False, dataset_split="dev")),
+    )
+    monkeypatch.setattr(
+        "src.scripts.eval_p0_baseline.load_chunk_manifest",
+        lambda _path: _build_chunk_manifest(dataset_split="dev"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(tmp_path / "eval.json"),
+            "--pipeline",
+            "hybrid+rerank",
+            "--split",
+            "dev",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    with pytest.raises(SystemExit):
+        main()
+
+    stderr = capsys.readouterr().err
+    assert "rerank_enabled" in stderr
+    assert "hybrid+rerank" in stderr
+
+
+def test_cli_accepts_hybrid_pipeline_when_rerank_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_report = _build_fake_report()
+    output_path = tmp_path / "eval.json"
+    scoreboard_path = tmp_path / "scoreboard.json"
+    _patch_cli_dependencies(monkeypatch, fake_report, rerank_enabled=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(output_path),
+            "--scoreboard",
+            str(scoreboard_path),
+            "--pipeline",
+            "hybrid",
+            "--split",
+            "dev",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    main()
+
+    scoreboard = load_scoreboard(scoreboard_path)
+    assert len(scoreboard.rows) == 1
+    assert scoreboard.rows[0].pipeline == "hybrid"
+
+
 def test_cli_warns_if_settings_split_differs_from_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -404,6 +478,7 @@ def _patch_cli_dependencies(
     *,
     dataset_split: str = "dev",
     persisted_split: str | None = None,
+    rerank_enabled: bool = True,
 ) -> dict[str, Any]:
     captured: dict[str, Any] = {}
     manifest_split = dataset_split if persisted_split is None else persisted_split
@@ -450,7 +525,9 @@ def _patch_cli_dependencies(
     monkeypatch.setattr(
         Settings,
         "from_env",
-        classmethod(lambda cls: cls(dataset_split=dataset_split)),
+        classmethod(
+            lambda cls: cls(dataset_split=dataset_split, rerank_enabled=rerank_enabled)
+        ),
     )
     monkeypatch.setattr(
         "src.scripts.eval_p0_baseline.load_chunk_manifest",
