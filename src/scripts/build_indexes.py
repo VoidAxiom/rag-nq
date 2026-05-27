@@ -19,6 +19,12 @@ def build_indexes(settings: Settings) -> IndexBuildManifest:
     """Run chunk ingest (optional skip), chunked dense upsert, and two-pass sparse build."""
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.info(
+        "build_indexes start: embedder_name=%s qdrant_collection=%s",
+        settings.embedder_name,
+        settings.qdrant_collection,
+        extra={"stage": "build"},
+    )
 
     LOGGER.info("stage start: chunk ingest", extra={"stage": "build"})
     chunk_manifest, _ = run_chunk_ingest(settings, force=Settings.force_ingest_from_env())
@@ -63,7 +69,7 @@ def build_indexes(settings: Settings) -> IndexBuildManifest:
     manifest = IndexBuildManifest(
         dataset_name=settings.dataset_name,
         dataset_split=settings.dataset_split,
-        embedding_model_name=settings.embedding_model_name,
+        embedder_name=settings.embedder_name,
         passage_count=chunk_count,
         chunk_count=chunk_count,
         qdrant_collection=settings.qdrant_collection,

@@ -24,7 +24,7 @@ def test_write_manifest_is_stable_json(tmp_path) -> None:
     manifest = IndexBuildManifest(
         dataset_name="sentence-transformers/NQ-retrieval",
         dataset_split="train",
-        embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
+        embedder_name="sentence-transformers/all-MiniLM-L6-v2",
         passage_count=10,
         qdrant_collection="nq_passages",
         sparse_index_path="artifacts/sparse_index_manifest.json",

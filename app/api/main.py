@@ -153,7 +153,7 @@ def safe_runtime_config(settings: Settings) -> RuntimeConfigResponse:
     return RuntimeConfigResponse(
         dataset_name=settings.dataset_name,
         dataset_split=settings.dataset_split,
-        embedding_model_name=settings.embedding_model_name,
+        embedder_name=settings.embedder_name,
         qdrant_url=_safe_url(settings.qdrant_url),
         qdrant_collection=settings.qdrant_collection,
         qdrant_vector_name=settings.qdrant_vector_name,

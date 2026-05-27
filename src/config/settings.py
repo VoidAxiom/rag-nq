@@ -26,12 +26,12 @@ class Settings(BaseModel):
     max_chunk_rows: int | None = Field(default=None, ge=1)
     max_index_rows: int | None = Field(default=None, ge=1)
 
-    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedder_name: str = "Qwen/Qwen3-Embedding-4B"
     embedding_batch_size: int = Field(default=64, ge=1)
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_retrieval_timeout_seconds: float = Field(default=15.0, gt=0)
-    qdrant_collection: str = "nq_passages"
+    qdrant_collection: str = "nq_passages_qwen3_embed_4b"
     qdrant_vector_name: str = "dense"
     qdrant_sparse_vector_name: str = "sparse"
     qdrant_distance: Literal["Cosine", "Dot", "Euclid", "Manhattan"] = "Cosine"
@@ -73,8 +73,8 @@ class Settings(BaseModel):
     hybrid_sparse_weight: float = Field(default=1.0, ge=0)
     retrieve_k: int = Field(default=50, ge=1)
     rerank_k: int | None = Field(default=None, ge=1)
-    rerank_enabled: bool = False
-    rerank_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rerank_enabled: bool = True
+    rerank_model_name: str = "BAAI/bge-reranker-v2-m3"
     rerank_context_token_budget: int = Field(default=384, ge=1)
     retrieval_dedupe_enabled: bool = True
     generation_provider: Literal["heuristic", "http_json", "openai"] = "heuristic"
@@ -166,8 +166,8 @@ class Settings(BaseModel):
             overrides["dataset_streaming"] = value.strip().lower() in {"1", "true", "yes", "on"}
         if (value := get("RAG_INGEST_PROGRESS")) is not None:
             overrides["ingest_show_progress"] = value.strip().lower() in {"1", "true", "yes", "on"}
-        if value := get("RAG_EMBEDDING_MODEL_NAME"):
-            overrides["embedding_model_name"] = value
+        if value := get("RAG_EMBEDDER_NAME"):
+            overrides["embedder_name"] = value
         if value := get("RAG_QDRANT_URL"):
             overrides["qdrant_url"] = value
         if value := get("RAG_QDRANT_RETRIEVAL_TIMEOUT_SECONDS"):

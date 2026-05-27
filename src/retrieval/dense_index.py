@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+import numpy as np
+
 from src.config.settings import Settings
 from src.ingestion.chunk_store import count_index_records_jsonl, iter_index_records_jsonl
 from src.ingestion.models import IndexChunk, Passage
@@ -26,15 +28,46 @@ _UPSERT_RETRY_BASE_SLEEP_SECONDS = 1.0
 _DENSE_CHECKPOINT_SCHEMA_VERSION = "1"
 
 
-class EmbeddingModel(Protocol):
-    """Protocol for sentence embedding model."""
+class Embedder(Protocol):
+    """Public embedder protocol returned by ``build_embedder``."""
 
     def encode(
-        self, texts: Sequence[str], *, batch_size: int, normalize_embeddings: bool
-    ) -> Sequence[Sequence[float]]:
-        """Encode input texts to dense vectors."""
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int | None = None,
+        normalize_embeddings: bool = True,
+    ) -> np.ndarray:
+        """Encode ``texts`` into a 2-D float32 ndarray of shape (len(texts), dim)."""
 
-    def get_sentence_embedding_dimension(self) -> int: ...
+    def get_sentence_embedding_dimension(self) -> int:
+        """Return the embedder's output dimension."""
+
+
+class _Float32EncoderWrapper:
+    """Wrap a SentenceTransformer so encode() always returns np.float32."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def encode(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int | None = None,
+        normalize_embeddings: bool = True,
+        **kwargs: Any,
+    ) -> np.ndarray:
+        arr = self._inner.encode(
+            texts,
+            batch_size=batch_size,
+            normalize_embeddings=normalize_embeddings,
+            **kwargs,
+        )
+        return arr.astype(np.float32, copy=False)
+
+    def get_sentence_embedding_dimension(self) -> int:
+        return int(self._inner.get_sentence_embedding_dimension())
 
 
 class QdrantLikeClient(Protocol):
@@ -55,6 +88,47 @@ class DenseBuildResult:
 
     vector_count: int
     vector_size: int
+
+
+def build_embedder(name: str) -> Embedder:
+    """Construct the sentence-transformers embedder for the given model name.
+
+    PLAN.md section 4 targets Apple Silicon as the primary dev box. On Apple
+    Silicon with MPS available, Qwen3-Embedding-* models load with
+    ``torch_dtype=torch.float16`` to keep the 4B variant near the ~8 GB RAM
+    budget. Other models and non-Mac runtimes use fp32; a 4B fp32 load can exceed
+    that budget, an accepted local-dev-only limit under CLAUDE.md's scope.
+    """
+
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "sentence-transformers is required for dense embedding. "
+            "Install project dependencies first."
+        ) from exc
+
+    if name.startswith("Qwen/Qwen3-Embedding") and _is_apple_silicon():
+        import torch
+
+        model = SentenceTransformer(
+            name,
+            model_kwargs={"torch_dtype": torch.float16},
+            device="mps",
+        )
+        return _Float32EncoderWrapper(model)
+    return SentenceTransformer(name)
+
+
+def _is_apple_silicon() -> bool:
+    """Return True only when torch reports an available MPS backend."""
+
+    try:
+        import torch
+
+        return bool(torch.backends.mps.is_available())
+    except (ImportError, AttributeError):
+        return False
 
 
 def _qdrant_payload(record: IndexChunk | Passage) -> dict[str, object]:
@@ -112,11 +186,11 @@ class DenseIndexer:
         self,
         settings: Settings,
         client: QdrantLikeClient | None = None,
-        model: EmbeddingModel | None = None,
+        model: Embedder | None = None,
     ) -> None:
         self._settings = settings
         self._client = client or _build_default_qdrant_client(settings.qdrant_url)
-        self._model = model or _build_default_embedding_model(settings.embedding_model_name)
+        self._model = model or build_embedder(settings.embedder_name)
 
     def build(self, passages: list[Passage]) -> DenseBuildResult:
         """Create or reuse collection and upsert all passage vectors."""
@@ -176,7 +250,9 @@ class DenseIndexer:
                 max_rows=max_index_rows,
             )
             remaining_records = max(total_records - resume_count, 0)
-            total_batches = math.ceil(remaining_records / lines_per_batch) if remaining_records else 0
+            total_batches = (
+                math.ceil(remaining_records / lines_per_batch) if remaining_records else 0
+            )
             ticker = ProgressTicker(
                 logger=LOGGER,
                 stage="dense_index",
@@ -308,18 +384,6 @@ def _build_default_qdrant_client(url: str) -> Any:
         return QdrantClient(url=url, check_compatibility=False)
     except TypeError:
         return QdrantClient(url=url)
-
-
-def _build_default_embedding_model(model_name: str) -> EmbeddingModel:
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "sentence-transformers is required for dense indexing. "
-            "Install project dependencies first."
-        ) from exc
-
-    return SentenceTransformer(model_name)
 
 
 def _upsert_with_retry(

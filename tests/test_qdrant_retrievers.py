@@ -159,7 +159,7 @@ def test_sparse_retriever_returns_empty_when_query_has_no_vocab_overlap() -> Non
 
 
 def test_hybrid_retriever_rrf_combines_dense_and_sparse() -> None:
-    settings = Settings(qdrant_collection="c", hybrid_rrf_k=60)
+    settings = Settings(qdrant_collection="c", hybrid_rrf_k=60, rerank_enabled=False)
     client = FakeQueryClient()
     dense = DenseQdrantRetriever(settings=settings, client=client, model=FakeEmbeddingModel())
     sparse = SparseQdrantRetriever(
@@ -186,7 +186,7 @@ def test_hybrid_retriever_rrf_combines_dense_and_sparse() -> None:
 
 
 def test_hybrid_retriever_dedupes_by_title_and_context_text() -> None:
-    settings = Settings(qdrant_collection="c", retrieve_k=10)
+    settings = Settings(qdrant_collection="c", retrieve_k=10, rerank_enabled=False)
     dense = SimpleNamespace(
         retrieve=lambda query, top_k: [
             PassageHit(
@@ -323,3 +323,110 @@ def test_build_default_qdrant_client_passes_timeout(monkeypatch) -> None:
     assert isinstance(client, FakeQdrantClient)
     assert captured["url"] == "http://localhost:6333"
     assert captured["timeout"] == 15.0
+
+
+def test_dense_retriever_uses_qwen3_embed_4b_mode() -> None:
+    """Settings with Qwen3-Embedding-4B name produces a (2560,) query vector."""
+
+    import numpy as np
+
+    settings = Settings(
+        qdrant_collection="c",
+        embedder_name="Qwen/Qwen3-Embedding-4B",
+    )
+
+    class FakeQwen3Embedder:
+        def encode(
+            self, texts: list[str], *, batch_size: int, normalize_embeddings: bool
+        ) -> np.ndarray:
+            assert batch_size == 1
+            assert normalize_embeddings is True
+            return np.zeros((len(texts), 2560), dtype=np.float32)
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 2560
+
+    client = FakeQueryClient()
+    retriever = DenseQdrantRetriever(
+        settings=settings, client=client, model=FakeQwen3Embedder()
+    )
+    retriever.retrieve("hello", top_k=2)
+
+    assert len(client.calls) == 1
+    query_vector = client.calls[0]["query"]
+    assert len(query_vector) == 2560
+
+
+def test_dense_retriever_legacy_minilm_mode() -> None:
+    """Legacy MiniLM-L6 path stays functional: (384,) query vector."""
+
+    import numpy as np
+
+    settings = Settings(
+        qdrant_collection="c",
+        embedder_name="sentence-transformers/all-MiniLM-L6-v2",
+    )
+
+    class FakeMiniLMEmbedder:
+        def encode(
+            self, texts: list[str], *, batch_size: int, normalize_embeddings: bool
+        ) -> np.ndarray:
+            assert batch_size == 1
+            assert normalize_embeddings is True
+            return np.zeros((len(texts), 384), dtype=np.float32)
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 384
+
+    client = FakeQueryClient()
+    retriever = DenseQdrantRetriever(
+        settings=settings, client=client, model=FakeMiniLMEmbedder()
+    )
+    retriever.retrieve("hello", top_k=2)
+
+    assert len(client.calls) == 1
+    query_vector = client.calls[0]["query"]
+    assert len(query_vector) == 384
+
+
+def test_build_embedder_qwen3_apple_silicon(monkeypatch) -> None:
+    """Qwen3-Embedding on Apple Silicon loads with mps + float16 + wraps to float32."""
+
+    import numpy as np
+    import torch
+
+    from src.retrieval import dense_index
+
+    captured: dict[str, Any] = {}
+
+    class FakeSentenceTransformer:
+        def __init__(self, name: str, **kwargs: Any) -> None:
+            captured["name"] = name
+            captured["kwargs"] = kwargs
+
+        def encode(self, texts, **_kwargs):
+            # Return float16 so the wrapper has to cast back to float32.
+            return np.zeros((len(texts), 2560), dtype=np.float16)
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 2560
+
+    monkeypatch.setattr(dense_index, "_is_apple_silicon", lambda: True)
+    monkeypatch.setattr(
+        dense_index, "SentenceTransformer", FakeSentenceTransformer, raising=False
+    )
+    # Also intercept the top-level import inside build_embedder by inserting
+    # the fake module into sys.modules so `from sentence_transformers import
+    # SentenceTransformer` resolves to FakeSentenceTransformer.
+    fake_module = SimpleNamespace(SentenceTransformer=FakeSentenceTransformer)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+    embedder = dense_index.build_embedder("Qwen/Qwen3-Embedding-4B")
+
+    assert captured["name"] == "Qwen/Qwen3-Embedding-4B"
+    assert captured["kwargs"].get("model_kwargs") == {"torch_dtype": torch.float16}
+    assert captured["kwargs"].get("device") == "mps"
+
+    out = embedder.encode(["hello"])
+    assert out.dtype == np.float32
+    assert out.shape == (1, 2560)
