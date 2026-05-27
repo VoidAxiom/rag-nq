@@ -115,8 +115,11 @@ def build_embedder(name: str) -> Embedder:
             model_kwargs={"torch_dtype": torch.float16},
             device="mps",
         )
+        model.max_seq_length = 512
         return _Float32EncoderWrapper(model)
-    return SentenceTransformer(name)
+    model = SentenceTransformer(name)
+    model.max_seq_length = 512
+    return model
 
 
 def _is_apple_silicon() -> bool:
