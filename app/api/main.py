@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Response
+from starlette.staticfiles import StaticFiles
 
 from app.api.schemas import (
     ArtifactStatus,
@@ -22,6 +24,7 @@ from app.api.schemas import (
     RuntimeConfigResponse,
 )
 from src.config.settings import Settings
+from src.evaluation.scoreboard import SCOREBOARD_PATH, Scoreboard, load_scoreboard
 from src.generation.grounded import GroundedGenerator
 from src.models.query_schemas import (
     GroundedAnswer,
@@ -53,6 +56,7 @@ class ApiGenerator(Protocol):
 
 RetrieverFactory = Callable[[Settings, Mode], ApiRetriever]
 GeneratorFactory = Callable[[Settings], ApiGenerator]
+ScoreboardPathFactory = Callable[[], Path]
 
 
 def create_app(
@@ -60,6 +64,7 @@ def create_app(
     settings: Settings | None = None,
     retriever_factory: RetrieverFactory | None = None,
     generator_factory: GeneratorFactory | None = None,
+    scoreboard_path_factory: ScoreboardPathFactory | None = None,
 ) -> FastAPI:
     """Build the HTTP app with injectable dependencies for tests."""
 
@@ -131,6 +136,17 @@ def create_app(
             LOGGER.exception("grounded generation failed")
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return retrieval_response.model_copy(update={"grounded": grounded})
+
+    @app.get("/scoreboard", response_model=Scoreboard)
+    def scoreboard() -> Scoreboard:
+        path = scoreboard_path_factory() if scoreboard_path_factory else SCOREBOARD_PATH
+        return load_scoreboard(path)
+
+    dist_path_env = os.environ.get("RAG_WEB_DIST_PATH")
+    if dist_path_env:
+        dist_path = Path(dist_path_env).expanduser().resolve()
+        if dist_path.is_dir():
+            app.mount("/", StaticFiles(directory=dist_path, html=True), name="web")
 
     return app
 
