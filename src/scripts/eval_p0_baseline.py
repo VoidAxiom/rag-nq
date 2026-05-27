@@ -128,16 +128,23 @@ def main() -> None:
                 f"uv run python -m src.scripts.build_indexes), or pass "
                 f"--split={persisted_split} to label the row truthfully."
             )
-        if args.pipeline == "hybrid+rerank" and not settings.rerank_enabled:
+        expected_rerank_by_pipeline = {
+            "hybrid+rerank": True,
+            "hybrid": False,
+        }
+        expected_rerank = expected_rerank_by_pipeline.get(args.pipeline)
+        if expected_rerank is not None and expected_rerank != settings.rerank_enabled:
             parser.error(
-                f"--pipeline={args.pipeline!r} requires settings.rerank_enabled=True, "
-                f"but settings.rerank_enabled={settings.rerank_enabled!r}. The "
-                f"HybridQdrantRetriever would skip the reranker stage, producing "
-                f"a non-reranked retrieval whose scoreboard row would incorrectly "
-                f"claim the canonical BGE-reranked baseline. Either enable rerank "
-                f"(unset RAG_RERANK_ENABLED, or set RAG_RERANK_ENABLED=true) or "
-                f"pass a different --pipeline label that truthfully describes the "
-                f"non-reranked run (e.g. --pipeline hybrid)."
+                f"--pipeline={args.pipeline!r} requires "
+                f"settings.rerank_enabled={expected_rerank!r}, but "
+                f"settings.rerank_enabled={settings.rerank_enabled!r}. The "
+                f"HybridQdrantRetriever's reranker stage runs iff "
+                f"rerank_enabled is True; the scoreboard pipeline label must "
+                f"truthfully describe whether rerank ran. To resolve: set "
+                f"RAG_RERANK_ENABLED={'true' if expected_rerank else 'false'} "
+                f"(or unset it to use the default True), or pass "
+                f"--pipeline={'hybrid+rerank' if settings.rerank_enabled else 'hybrid'} "
+                f"to label the row truthfully for the current rerank setting."
             )
         if settings.dataset_split != persisted_split:
             print(
