@@ -397,16 +397,31 @@ verbatim, or would addressing it expand scope beyond what the spec describes?**
   update the PR body, then you reject. Don't invent rationale on the
   fly — the rationale must trace to the PR body.
 
-**REJECTED threads still need to be resolved.** `review-gate.sh wait`
-requires zero unresolved Codex threads to reach the merge gate. After
-posting the §8e re-trigger with the verbatim `## Out of scope` citation
-for a rejected finding, RESOLVE the thread via
-`bash scripts/review-gate.sh resolve <thread-id>` — same `resolve`
-call as for fixed findings. The thread is "addressed" either by code
-change (fix) or by documented rejection (rationale); both forms close
-the thread so the merge gate can clear. Without this, a legitimate
-rejection leaves the thread open and the PR can never reach
-REVIEWED-CLEAN.
+**REJECTED threads still need to be resolved — and resolved BEFORE
+the §8e re-trigger goes out.** `review-gate.sh wait` exits with
+`FINDINGS` as soon as it sees any unresolved Codex thread, before it
+even checks for a fresh ack or clean verdict. So if you post the
+§8e re-trigger while the rejected thread is still open, the wait
+helper will immediately rediscover that thread and never give Codex
+a chance to read the documented rejection — you'd just bounce off
+the same finding on the next cycle.
+
+Correct order for a rejected finding:
+
+1. Compose the §8e re-trigger body (with the verbatim `## Out of
+   scope` citation) but DO NOT post it yet.
+2. `bash scripts/review-gate.sh resolve <thread-id>` — close the
+   thread mechanically. The rationale lives in the PR body's
+   `## Out of scope` section (authoritative) and will be repeated
+   in the §8e comment (informational for the next reviewer).
+3. NOW post the §8e re-trigger.
+4. Run `bash scripts/review-gate.sh wait <PR#>` — with threads at
+   zero open, the helper polls codex correctly.
+
+This matches the ordering step 8d below already uses for fixed
+findings. The mechanical `resolve` call is the same regardless of
+whether the thread closed via code change (fix) or documented
+rejection (rationale).
 
 After triage, proceed to fix only the items that survived triage —
 AND resolve all rejected-thread IDs at step 8d alongside the
