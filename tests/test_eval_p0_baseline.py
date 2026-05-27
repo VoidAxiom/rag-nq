@@ -62,6 +62,44 @@ def test_cli_writes_eval_and_appends_scoreboard(
     assert f"Appended scoreboard row at {scoreboard_path}" in stdout
 
 
+def test_cli_accepts_latency_sample_size_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_report = _build_fake_report()
+    output_path = tmp_path / "eval.json"
+    scoreboard_path = tmp_path / "scoreboard.json"
+    captured = _patch_cli_dependencies(monkeypatch, fake_report)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(output_path),
+            "--scoreboard",
+            str(scoreboard_path),
+            "--latency-sample-size",
+            "0",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    main()
+
+    assert output_path.is_file()
+    scoreboard = load_scoreboard(scoreboard_path)
+    assert len(scoreboard.rows) == 1
+    row = scoreboard.rows[0]
+    assert row.latency_ms.p50 == 0
+    assert row.latency_ms.p95 == 0
+    assert row.notes is not None
+    assert "latency_p50_p95_from_prefix_sample=0_queries" in row.notes
+    assert "latency_sample_max_queries" not in captured
+
+
 def test_cli_no_append_scoreboard_flag_skips_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -149,6 +187,29 @@ def test_cli_rejects_non_positive_max_queries(
         main()
 
     assert "must be >= 1" in capsys.readouterr().err
+
+
+def test_cli_rejects_latency_sample_size_negative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(tmp_path / "eval.json"),
+            "--latency-sample-size",
+            "-1",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    with pytest.raises(SystemExit):
+        main()
 
 
 def _patch_cli_dependencies(

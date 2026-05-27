@@ -41,6 +41,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
 def main() -> None:
     setup_logging()
     saved_levels = _quiet_dependency_logs()
@@ -72,7 +82,7 @@ def main() -> None:
         )
         parser.add_argument(
             "--latency-sample-size",
-            type=_positive_int,
+            type=_non_negative_int,
             default=50,
             help=(
                 "Maximum number of timed eval queries for p50/p95 capture; one "
