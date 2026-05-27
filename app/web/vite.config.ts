@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+// Use vitest/config's defineConfig: it's a superset of vite's that also types the `test:` key. Avoids TS2769.
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
