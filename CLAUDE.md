@@ -108,17 +108,29 @@ comment format and Claude will rule.
 
 ## Autonomous mode (load-bearing — overrides default idle behavior)
 
-### The mantra
+### The mantra (also printed atop every sidecar tick)
 
+> **You deliver a working live product, not code.** A merged PR is not
+> a deliverable; the artifact running on primary at spec scale producing
+> the measurable outcome is the deliverable.
+>
 > **ACT, DON'T NARRATE. Every stall is a failure to act.**
 >
 > - Impl silent → check on it (TaskList). Alive → wait. Dead → re-dispatch.
-> - Codex 👀'd → wait for verdict. Codex hasn't → re-trigger after grace window.
-> - PR clean → merge. Verdict is the user's confirmation now.
-> - Queue has next → dispatch. Phase boundary → start next phase.
+> - Codex 👀'd → wait for verdict. Codex hasn't → re-trigger. There are two layered re-trigger cadences: `scripts/review-gate.sh wait` auto-retriggers at its `ackWaitSec` (default 120 s) when it's actively driving a loop; the sidecar's coarser fallback re-triggers at `SIDECAR_STALL_MIN` (default 15 min) when no wait helper is in flight.
+> - PR clean → merge. Verdict's the user's confirmation now.
+> - **PR merged → live-verify on primary IMMEDIATELY. No exceptions.**
+>   Run the packet's "Acceptance — Runtime verification" measurable (the
+>   live command(s) the spec.md prescribes — query, log, metric, UI
+>   render). If short of spec, the packet stays OPEN; iterate. Only THEN
+>   does the packet close in Linear.
+> - Queue has next → dispatch (only after current packet's live-on-primary
+>   passes). Phase boundary → start next phase.
 > - Genuinely external-blocked & nothing pending → end turn. Next tick rechecks.
 >
-> "What happened?" from the user is the failure metric.
+> "What happened?" from the user is the failure metric. So is "is X really
+> working live?" — if the answer requires checking instead of "yes,
+> measured N at HH:MM", the packet wasn't truly closed.
 
 When the user has stepped away and said something like "run autonomously,
 make the best decisions you can, I won't be around to approve", the
@@ -128,49 +140,177 @@ following discipline applies:
 - narrate a stall instead of acting (e.g. "impl agent failed, awaiting
   guidance") and then wait for the user to come back and say "what
   happened";
-- treat a lull between background-agent notifications as "nothing to do"
-  and idle;
+- treat a 5-min lull between background-agent notifications as "nothing
+  to do" and idle;
 - skip the obvious next packet because "the user might want to confirm
-  the queue first".
+  the queue first";
+- declare a packet done at `gh pr merge` without personally measuring
+  the live behavior on primary the spec.md promised.
 
-In autonomous mode, those are all violations. The user's pre-authorization
-IS the confirmation; idling instead of advancing the build loop wastes
-the autonomy they granted.
+In autonomous mode, those are all violations. The user's
+pre-authorization is the confirmation; idling instead of advancing the
+build loop wastes the autonomy they granted; trusting "tests passed +
+PR merged" as proof of fitness-for-purpose violates the mantra above.
 
-**Per-tick discipline.** Whatever recurring trigger you use to wake Claude
-in autonomous mode (a sidecar script, a `/loop`, a scheduled routine),
-each tick Claude:
-1. Surveys current state (worktrees, open PRs, Linear ledger, impl
-   subagent status).
-2. For each actionable item, takes the action **immediately** without
-   asking for confirmation, per the standing autonomy boundary. Concretely:
-   - PR has unresolved codex thread(s) → re-dispatch impl with explicit
-     fix instructions per the unresolved threads (read them via
-     `review-gate.sh threads`).
-   - PR has head-pinned `REVIEWED-CLEAN` → final-head re-gate +
-     squash-merge.
-   - PR has `CLEAN-COMMENT-MANUAL` → judge head-pin per the standing
-     framework (clean comment must post-date the head push); if it does,
-     run final-head re-gate + squash-merge.
-   - Worktree has committed-but-unpushed commits → impl notify-done
-     likely never arrived (agent stalled). Run the pre-PR gate directly;
-     if clean, re-dispatch impl to do push + PR + wait.
-   - Worktree has pushed commits but no PR → re-dispatch impl to open
-     the PR + drive the eye-emoji loop.
-   - No worktrees, no open PRs — between packets → spec + dispatch the
-     next packet from the queue.
-3. If a background impl agent has been silent past your watchdog threshold
-   AND the surveyor shows its worktree has unpushed/unreviewed work,
-   treat the agent as STALLED and re-dispatch with a resume prompt that
-   gives it the exact next step. NEVER wait for the user.
+**The sidecar rail.** `scripts/autonomous-sidecar.sh` is the source-of-
+truth state surveyor. Each tick emits, in this order:
+- A header `=== AUTONOMOUS sidecar tick @ HH:MM:SS ===` plus the mantra
+  above (printed in full atop every tick).
+- A `primary: <short-sha> <subject>` line reflecting `origin/main`'s
+  current HEAD.
+- (Optional) `merged since last tick:` block listing PR-driven squash
+  merges that landed since the previous tick — each line carries the
+  short SHA, PR number, and any `VOI-N` token parsed from the merge-
+  commit body (`%B`). Newly-merged VOI items become `ACT-NOW` items.
+- A `packets:` block listing each per-packet worktree under
+  `<repo-parent>/.rag-nq-showcase-worktrees/` with one summary line per
+  worktree (branch, HEAD short SHA, ahead-count, pushed-state, plus PR
+  number + gate verdict + open-thread count + 👀-ack state when a PR
+  exists) and one decision line tagged `ACT-NOW`, `VERIFY`, or
+  `NO-ACTION`. Plus a second pass for any open PR not backed by a
+  worktree (director-owned doc/CI PRs from primary).
+- A `tick summary: X ACT-NOW, Y VERIFY, Z NO-ACTION (in-flight)` line.
+- For newly-merged work this tick: a `→ ACT-NOW (newly merged VOI):`
+  follow-on that lists every unblocked Linear issue to live-verify and
+  dispatch.
+
+**Cadence + socket-error retry.** The cron fires in CLUSTERED TRIPLETS
+every 20 min — three ticks at 1-min spacing per cycle:
+```
+cron: 7,8,9,27,28,29,47,48,49 * * * *
+```
+This gives automatic retry on transient API socket errors (a tick that
+dies mid-turn is re-fired ~60s later by the next member of its triplet).
+
+**End-of-turn success marker.** To prevent the second + third ticks of
+a triplet from redoing work the first already did, Claude writes
+`.codex-runs/sidecar-last-success.txt` with the current epoch as the
+LAST tool call of every successful tick. The sidecar checks the marker
+at top: if it's <90s fresh, the sidecar prints `BACKUP-TICK SKIP` and
+exits, and Claude ends its turn immediately.
+
+The flow:
+- Healthy run: tick 1 (e.g. :07) does work + writes marker. Ticks 2/3
+  (:08/:09) see fresh marker, skip. Next cycle at :27.
+- Socket-error run: tick 1 dies mid-turn before writing marker. Tick 2
+  (:08) sees stale-or-missing marker, runs the work as a retry. If
+  tick 2 succeeds, it writes the marker; tick 3 skips. If tick 2 also
+  fails, tick 3 retries again. Total recovery window: 2 min vs the
+  20-min cycle.
+
+The loop ends when the user explicitly cancels OR all phases (P0..P7
+per `docs/PLAN.md` §5) are complete and live-verified on primary.
+
+**Per-tick discipline (the contract that makes autonomy reliable).**
+
+Each sidecar tick, Claude:
+1. Runs the sidecar; reads the output.
+2. For each `ACT-NOW`-tagged line in the `packets:` block (plus any
+   `→ ACT-NOW (newly merged VOI):` follow-on), takes the action **immediately**
+   without asking for confirmation, per the standing autonomy boundary.
+   Concretely:
+   - "PR #N has unresolved codex thread(s) — impl iteration owed" →
+     re-dispatch impl in background with explicit fix instructions per
+     the unresolved threads (read them via `review-gate.sh threads <PR>`).
+   - "PR #N has `CLEAN-COMMENT-MANUAL`" → judge head-pin via the
+     standing framework (clean comment must post-date the head push);
+     if it does, run final-head mechanical re-gate (scope check +
+     audit-trail + `mss=CLEAN`) → `gh pr merge --squash --delete-branch`
+     → `git checkout main && git pull --ff-only origin main` →
+     live-verify on primary against the merged main → if mismatch,
+     re-open the packet + dispatch a fix impl (see also
+     "PR #N merged but live-on-primary not yet measured" below).
+   - "PR #N has head-pinned `REVIEWED-CLEAN`" → same ordering: final-
+     head mechanical re-gate → squash-merge → pull main → live-verify
+     on the merged-in code → re-open on mismatch.
+   - "Worktree X has committed-but-unpushed commit(s)" → impl notify-
+     done likely never arrived (agent stalled). Run the pre-PR gate
+     directly; if clean, re-dispatch impl to do push + PR + wait.
+   - "Worktree X has pushed commits but no PR" → re-dispatch impl to
+     open the PR + drive the eye-emoji loop.
+   - "PR #N merged but live-on-primary not yet measured" → STOP all
+     other dispatch; pull main; run the spec's `Acceptance — Runtime
+     verification` steps PERSONALLY on primary; only then mark the
+     phase rollup updated in VOI-243 and proceed to the next packet.
+   - "No worktrees, no open PRs — between packets" → read VOI-243
+     "Phase queue", spec + dispatch the next packet. Phase boundaries
+     bump to next phase per `docs/PLAN.md` §5.X.
+3. If a background impl agent has been silent for >20 min AND the
+   sidecar shows its worktree has unpushed/unreviewed work, treat the
+   agent as STALLED and re-dispatch with a resume prompt that gives
+   it the exact next step. NEVER wait for the user.
 4. If everything in flight is genuinely blocked on an external clock
-   (codex bot processing, build in progress, remote latency) and there
-   are no actionable items, end the turn cleanly. The next tick will
-   recheck.
+   (codex bot processing, Qdrant container restart in progress, gh
+   remote latency, HF model download) and there are no actionable
+   items, end the turn cleanly. The next 20-min tick will recheck.
 
-**End conditions.** Autonomy ends when the project's defined acceptance
-is met, OR a genuine spec-level decision arises that requires the user,
-OR the user re-engages and explicitly says "I'm back" or similar.
+**Live-on-primary verification (the most-violated step — call it out).**
+Every packet's `spec.md` MUST include an `## Acceptance — Runtime
+verification` subsection with EXACT commands and EXACT expected output
+(see CLAUDE.md §"Deliver a working product"). At merge time, Claude
+PERSONALLY:
+1. `git checkout main && git pull --ff-only origin main`.
+2. Runs each command from the spec's Runtime-verification block.
+3. Reads the actual output.
+4. Confirms it matches what the spec promised.
+5. If it does NOT match: REJECT the PR's "done" status — re-open the
+   packet in Linear, file the live-runtime mismatch as a finding,
+   dispatch the impl back to fix it. Even if all mechanical gates +
+   codex review came back clean.
+
+Mechanical gates (ruff, pytest, /code-review verdict, codex review
+verdict) are NECESSARY conditions for merge; the live-on-primary
+verification is SUFFICIENT. Merge happens at AND, not OR.
+
+**Failure handling — auto-recover, don't escalate prematurely.**
+- Impl agent stalled (stream watchdog, timeout, completed-with-no-
+  progress) → re-dispatch with state-aware resume prompt.
+- Cloudflare WAF block on a Linear MCP write → retry with prose-only
+  body (no SQL fragments, no `curl` snippets with numeric IPs, no
+  shell-injection-looking patterns).
+- Docker port collision with primary (Qdrant binds 6333) → impl uses
+  a different host port via worktree-local
+  `docker-compose.override.yml`, OR the impl's runtime smoke just hits
+  primary's Qdrant since indexes are shared.
+- Qdrant collection schema mismatch after an embedder change (e.g. dim
+  collision when re-indexing `nq_passages` against a different-dim
+  embedder) → drop the collection, re-create with the new schema,
+  re-index from the persisted JSONL artifacts. Live data on primary
+  is dev-only and never load-bearing.
+- HF model weights download stalls / fails → retry once via
+  `huggingface_hub.snapshot_download(..., force_download=True)` which
+  re-fetches without touching the existing cache; if that still fails,
+  non-destructively quarantine the model's cache subdir by RENAMING it.
+  HF stores repo caches under the `models--<owner>--<repo>` scheme (slashes
+  in the repo id become double-dashes), so for `Qwen/Qwen3-Embedding-4B`
+  the path is `~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-4B/`.
+  Programmatically: discover the path via
+  `python -c "from huggingface_hub import scan_cache_dir; print([r.repo_path for r in scan_cache_dir().repos if r.repo_id == '<owner>/<repo>'])"`
+  then `mv <that-path> <that-path>.quarantined-<epoch>` and retry.
+  **NEVER** `rm -rf` the HF cache — that contradicts the autonomy
+  boundary above and risks destroying weights the system was using.
+  If the rename+retry path still fails, document the live-network
+  failure in the impl's notify-done and Claude follows up post-merge on
+  primary.
+- Genuinely-blocking unknown (no precedent in this CLAUDE.md, an
+  ambiguous Linear MCP error, an unexpected codex finding requiring
+  a real spec decision Claude can't make from research alone) →
+  escalate via VOI-243 "Open decisions" with the question stated
+  precisely, then continue any non-blocked work.
+
+**End conditions.** Autonomy ends when:
+- P7 closes (the whole project is delivered per `docs/PLAN.md` master
+  acceptance: master scoreboard rows populated, MuSiQue F1 target
+  hit live on primary, Streamlit comparator page reproducible from a
+  clean clone), OR
+- A genuine spec-level decision arises that requires the user (see
+  "Genuinely-blocking" above), OR
+- The user re-engages and explicitly says "I'm back" / similar.
+
+VOI-243 "Live status" + "Open decisions" are the audit trail. Every
+sidecar tick that produces an action also produces a VOI-243 update
+(via `mcp__claude_ai_Linear__save_comment` on the Command Center) so
+the user can read one issue on return and recover the whole arc.
 
 ## Operating model
 

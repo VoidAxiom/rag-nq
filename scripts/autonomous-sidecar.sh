@@ -115,12 +115,20 @@ if [ -f "$MARKER" ]; then
   fi
 fi
 
-# ── tick header + mantra (8 lines) ──
+# ── tick header + mantra ──
+# Mirrors CLAUDE.md §"Autonomous mode" → "The mantra" verbatim so the
+# operating sidecar tick is the source-of-truth for the loop's discipline.
 echo "=== AUTONOMOUS sidecar tick @ $(date +%H:%M:%S) ==="
-echo "mantra: ACT, DON'T NARRATE. Idle = failure to act."
+echo "mantra: You deliver a working LIVE PRODUCT, not code. A merged PR is not"
+echo "  the deliverable; the artifact running on primary at spec scale producing"
+echo "  the measurable outcome IS the deliverable."
+echo "  ACT, DON'T NARRATE. Every stall is a failure to act."
 echo "  · Impl silent → TaskList check; alive=wait, dead=re-dispatch"
-echo "  · Codex 👀'd → wait verdict; not 👀'd & >2min → re-trigger"
-echo "  · PR clean → merge; queue has next → dispatch; nothing actionable → end turn"
+echo "  · Codex 👀'd → wait verdict; not 👀'd & past wait-helper's 120s ackWaitSec → review-gate.sh wait auto-retriggers; this sidecar's coarser fallback re-triggers at >${STALL_MIN}min"
+echo "  · PR clean → final-head mechanical re-gate → squash-merge → pull main →"
+echo "    live-verify on primary against the merged-in code → re-open on mismatch"
+echo "  · Queue has next → dispatch (ONLY after current packet's live-on-primary passes)"
+echo "  · Genuinely external-blocked & nothing pending → end turn cleanly"
 echo
 
 # ── primary (1 line) ──
@@ -141,16 +149,34 @@ merged_pr_list=""
 saw_merge=""
 if [ -n "$prev_main_sha" ] && [ "$prev_main_sha" != "$cur_main_sha" ]; then
   # Walk new commits oldest→newest; extract VOI-N from "Closes VOI-N" or
-  # the conventional "(#PR)" squash-merge suffix.
+  # the conventional "(#PR)" squash-merge suffix. Per the squash-merge
+  # convention the conventional commit subject is title-only (no VOI
+  # token) and `Closes VOI-N` lives in the PR body, which `gh pr merge
+  # --squash` carries into the merge commit body. Per-commit, scan
+  # %B (subject + body) for the VOI token so body-only closures are
+  # detected; the subject is still used for the display line.
   new_merges=$(git log --pretty='%H %s' "$prev_main_sha..origin/main" 2>/dev/null | head -50)
   if [ -n "$new_merges" ]; then
     echo
     echo "merged since last tick:"
     while IFS= read -r line; do
       sha=${line:0:7}
+      full_sha=${line:0:40}
       subject=${line:41}
       pr_num=$(echo "$subject" | grep -oE '\(#[0-9]+\)' | tr -d '(#)' | head -1)
-      voi_num=$(echo "$subject" | grep -oE 'VOI-[0-9]+' | head -1)
+      # Scan the full commit body (%B) for a closing VOI trailer; %s
+      # alone misses `Closes VOI-N` trailers carried into the squash-
+      # merge body, but a bare `VOI-N` mention in the body is NOT a
+      # closure (PRs sometimes reference VOI-243 as the Command-Center
+      # anchor without closing it). Match GitHub's close-keyword set
+      # (close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved,
+      # case-insensitive) so we don't false-positive on stale mentions.
+      voi_num=$(git -C "$REPO" log -1 --pretty='%B' "$full_sha" 2>/dev/null | python3 -c '
+import re, sys
+# Uppercase the matched VOI-N so case-variant closures ("closes voi-191")
+# normalize to the canonical uppercase form used in Linear + the merged_voi_list.
+m = re.search(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(VOI-[0-9]+)\b", sys.stdin.read(), re.IGNORECASE)
+print(m.group(1).upper() if m else "")' 2>/dev/null)
       echo "  + $sha PR#${pr_num:-?} ${voi_num:-?}: $(echo "$subject" | cut -c1-60)"
       saw_merge="yes"
       [ -n "$voi_num" ] && merged_voi_list="$merged_voi_list $voi_num"
@@ -330,13 +356,13 @@ except Exception:
         decision="ACT-NOW: head-pinned CLEAN on PR head — but worktree is local-ahead (unpushed). Push first, then re-gate"
         actions_now=$((actions_now+1))
       elif echo "$gate" | grep -q 'CLEAN ('; then
-        decision="ACT-NOW: head-pinned CLEAN — merge"
+        decision="ACT-NOW: head-pinned CLEAN — final-head mechanical re-gate → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
         actions_now=$((actions_now+1))
       elif echo "$gate" | grep -q 'CLEAN-COMMENT-MANUAL' && [ "$pushed" = "local-ahead" ]; then
         decision="ACT-NOW: CLEAN-COMMENT-MANUAL on PR head — but worktree is local-ahead (unpushed). Push first, then re-judge timeline + re-gate"
         actions_now=$((actions_now+1))
       elif echo "$gate" | grep -q 'CLEAN-COMMENT-MANUAL'; then
-        decision="ACT-NOW: CLEAN-COMMENT-MANUAL — judge timeline + merge"
+        decision="ACT-NOW: CLEAN-COMMENT-MANUAL — judge timeline (clean comment must post-date current head) → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
         actions_now=$((actions_now+1))
       elif [ "$threads_open" -gt 0 ]; then
         # FINDINGS arrived (threads_open > 0 IS terminal per review-gate.sh
@@ -503,10 +529,10 @@ except Exception:
     #   change directly, which violates the cardinal rule) — spawn a
     #   fresh impl for the fix and stop hand-editing impl-scope files.
     if echo "$gate" | grep -q 'CLEAN ('; then
-      decision="ACT-NOW [$owner]: head-pinned CLEAN — merge (final-head re-gate first)"
+      decision="ACT-NOW [$owner]: head-pinned CLEAN — final-head mechanical re-gate → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
       actions_now=$((actions_now+1))
     elif echo "$gate" | grep -q 'CLEAN-COMMENT-MANUAL'; then
-      decision="ACT-NOW [$owner]: CLEAN-COMMENT-MANUAL — judge timeline (push < @codex review < clean comment) + merge"
+      decision="ACT-NOW [$owner]: CLEAN-COMMENT-MANUAL — judge timeline (push < @codex review < clean comment) → squash-merge → pull main → live-verify on primary per spec.md Runtime-verification"
       actions_now=$((actions_now+1))
     elif [ "$threads_open" -gt 0 ]; then
       if [ "$owner" = "claude" ]; then
