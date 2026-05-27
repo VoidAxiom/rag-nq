@@ -269,11 +269,16 @@ verification is SUFFICIENT. Merge happens at AND, not OR.
 - HF model weights download stalls / fails → retry once via
   `huggingface_hub.snapshot_download(..., force_download=True)` which
   re-fetches without touching the existing cache; if that still fails,
-  non-destructively quarantine the model's cache subdir by RENAMING it
-  (`mv ~/.cache/huggingface/hub/<model-id> ~/.cache/huggingface/hub/<model-id>.quarantined-<epoch>`)
-  and retry. **NEVER** `rm -rf` the HF cache — that contradicts the
-  autonomy boundary above and risks destroying weights the system was
-  using. If the rename+retry path still fails, document the live-network
+  non-destructively quarantine the model's cache subdir by RENAMING it.
+  HF stores repo caches under the `models--<owner>--<repo>` scheme (slashes
+  in the repo id become double-dashes), so for `Qwen/Qwen3-Embedding-4B`
+  the path is `~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-4B/`.
+  Programmatically: discover the path via
+  `python -c "from huggingface_hub import scan_cache_dir; print([r.repo_path for r in scan_cache_dir().repos if r.repo_id == '<owner>/<repo>'])"`
+  then `mv <that-path> <that-path>.quarantined-<epoch>` and retry.
+  **NEVER** `rm -rf` the HF cache — that contradicts the autonomy
+  boundary above and risks destroying weights the system was using.
+  If the rename+retry path still fails, document the live-network
   failure in the impl's notify-done and Claude follows up post-merge on
   primary.
 - Genuinely-blocking unknown (no precedent in this CLAUDE.md, an
