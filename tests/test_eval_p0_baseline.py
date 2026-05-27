@@ -282,6 +282,7 @@ def test_cli_rejects_hybrid_plus_rerank_when_rerank_disabled(
     stderr = capsys.readouterr().err
     assert "rerank_enabled" in stderr
     assert "hybrid+rerank" in stderr
+    assert "RAG_RERANK_ENABLED=true (or unset it to use the default True)" in stderr
 
 
 def test_cli_rejects_hybrid_label_when_rerank_enabled(
@@ -322,6 +323,8 @@ def test_cli_rejects_hybrid_label_when_rerank_enabled(
     stderr = capsys.readouterr().err
     assert "rerank_enabled" in stderr
     assert "hybrid" in stderr
+    assert "RAG_RERANK_ENABLED=false" in stderr
+    assert "unset it to use the default True" not in stderr
 
 
 def test_cli_accepts_hybrid_pipeline_when_rerank_disabled(

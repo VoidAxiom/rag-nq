@@ -134,6 +134,10 @@ def main() -> None:
         }
         expected_rerank = expected_rerank_by_pipeline.get(args.pipeline)
         if expected_rerank is not None and expected_rerank != settings.rerank_enabled:
+            recovery_env_hint = (
+                f"RAG_RERANK_ENABLED={'true' if expected_rerank else 'false'}"
+                + (" (or unset it to use the default True)" if expected_rerank else "")
+            )
             parser.error(
                 f"--pipeline={args.pipeline!r} requires "
                 f"settings.rerank_enabled={expected_rerank!r}, but "
@@ -141,8 +145,7 @@ def main() -> None:
                 f"HybridQdrantRetriever's reranker stage runs iff "
                 f"rerank_enabled is True; the scoreboard pipeline label must "
                 f"truthfully describe whether rerank ran. To resolve: set "
-                f"RAG_RERANK_ENABLED={'true' if expected_rerank else 'false'} "
-                f"(or unset it to use the default True), or pass "
+                f"{recovery_env_hint}, or pass "
                 f"--pipeline={'hybrid+rerank' if settings.rerank_enabled else 'hybrid'} "
                 f"to label the row truthfully for the current rerank setting."
             )
