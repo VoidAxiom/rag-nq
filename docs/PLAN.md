@@ -20,7 +20,7 @@ Multi-hop is the load-bearing axis. Single-hop NQ stays as the fast
 lane and the humility baseline (proves we didn't break what already
 works). The entire stack runs locally; the showcase is reproducible by
 anyone cloning the repo and running `docker compose up` + one
-indexing script + `streamlit run`.
+indexing script + `npm run dev` (or `npm run build` + `uvicorn`).
 
 ### Hero claim
 
@@ -201,9 +201,21 @@ No per-query metered runtime spend. The deployed showcase is free to run.
 
 ## §5 Phase-by-phase plan
 
-Each phase ships a **runnable Streamlit page** that updates the
-master scoreboard. The scoreboard is the project's primary delivery
-vehicle — see §6.
+Each phase ships a **runnable React route** under `app/web/src/pages/`
+that updates the master scoreboard. The scoreboard is the project's
+primary delivery vehicle — see §6, §7.
+
+**NOTE on phase descriptions below**: Streamlit references in the
+P0..P7 descriptions are legacy from the pre-pivot plan (the project
+originally used Streamlit for the UI; switched to Vite + React +
+Tailwind + shadcn/ui per director decision 2026-05-27 — see §7 for the
+canonical stack). For any packet not yet spec'd, transpose Streamlit
+references in the description below to their React equivalents:
+`app/streamlit_app.py` → `app/web/src/main.tsx` + `app/web/src/App.tsx`;
+Streamlit "page" → React route at `/<page>`; `uv run streamlit run ...`
+→ `cd app/web && npm run dev` (or `npm run build` + `uvicorn` with
+`RAG_WEB_DIST_PATH=app/web/dist`). The packet's own `.codex-runs/<id>/spec.md`
+authoring re-aligns the allowlist to the React tree.
 
 Every phase's acceptance includes the runtime verification step
 mandated by `CLAUDE.md` § "Deliver a working product". Mechanical
@@ -707,29 +719,82 @@ for measurable results. Schema (versioned; v1 here):
 ```
 
 Every phase's eval script appends rows; rows are immutable once
-written. The Streamlit Scoreboard page reads this file and renders.
+written. The React `/scoreboard` route reads this file (via the
+FastAPI `GET /scoreboard` endpoint) and renders it as a sortable
+shadcn-ui `<Table>`.
 
 ---
 
-## §7 Streamlit IA / showcase delivery contract
+## §7 Web UI IA / showcase delivery contract
 
-The Streamlit app is the **primary delivery vehicle**. Pages:
+**Stack** (per director decision 2026-05-27 — replaced an earlier
+Streamlit-based UI when the ambition for visualizers + side-by-side
+comparison views outgrew Streamlit's primitive surface):
 
-1. **Home / Ask** — query interface; pick a pipeline; see answer +
-   citations + retrieval trace.
-2. **Scoreboard** — master sortable table (§6).
-3. **Compare Pipelines** — side-by-side comparison (P7).
-4. **Graph Visualizer** — HippoRAG 2 PPR walk visualization for a query
-   (P3+).
-5. **Trace Viewer** — Search-o1 iterative reasoning hops (P5+).
-6. **Config** — view current settings, indexes loaded, models available.
+* **Vite + React 19 + TypeScript** at `app/web/`. SPA, no SSR (local-
+  dev only).
+* **Tailwind 4** for styling (CSS-first config via `@tailwindcss/vite`).
+* **shadcn/ui** (radix base, nova preset) for primitives — `Table`,
+  `Card`, `Button`, plus components added as needed per page.
+* **React Router v7** (`react-router`, the unified package — not the
+  older `react-router-dom`) for SPA routing.
+* **TanStack Query v5** for FastAPI data fetching, cache,
+  loading/error states, and suspense-compatible refetches.
+* **Recharts** for tabular + chart visuals (Pareto plots, latency
+  distributions, scoreboard sparklines).
+* **Vitest + React Testing Library + jsdom** for component tests.
+* **Graph viz**: `react-force-graph-2d` or Cytoscape via
+  `react-cytoscapejs` for the HippoRAG 2 PPR walk (P3+).
+* **Heatmaps**: small canvas or `@nivo/heatmap` for the ColBERT MaxSim
+  matrix (P2+).
+
+**Backend coupling** *(planned; lands as VOI-247 P0-D — until that
+packet merges, `app/web/` and the FastAPI `GET /scoreboard` +
+StaticFiles mount do not exist on `main`)*: the React app will be
+served at runtime by FastAPI when `RAG_WEB_DIST_PATH` env var is set
+to `app/web/dist/`. In dev, `npm run dev` runs Vite at port 5173 with
+proxy to FastAPI on 8000. For one-command demo from a clean clone (post-VOI-247), run from the
+repo root: `docker compose up -d qdrant && (cd app/web && npm install
+&& npm run build) && RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn
+app.api.main:app`. The `-d` (detached) flag is essential —
+without it `docker compose up` blocks the terminal in the foreground
+and the chained `&&` never proceeds to the web build + uvicorn. The `(cd app/web && ...)` subshell keeps the
+outer shell at the repo root so `uvicorn`'s Python import path
+resolves the `app.api.main` package correctly AND the
+`RAG_WEB_DIST_PATH` relative path resolves to `<repo>/app/web/dist`
+rather than `<repo>/app/web/app/web/dist`.
+
+**Pages** (routes; each lands in its phase's packet):
+
+1. **`/`** — Home / Ask. Query interface; pick a pipeline; see answer
+   + citations + retrieval trace. Wired in later packets (post-P0).
+2. **`/scoreboard`** — master sortable table reading from
+   `GET /scoreboard` FastAPI endpoint; renders the schema from §6.
+   Landed in P0-D (VOI-247).
+3. **`/compare`** — side-by-side comparison view (P7). Pick any query,
+   pick any two pipeline configs, see retrieval traces + final answers
+   stacked.
+4. **`/graph`** — HippoRAG 2 PPR walk visualization for a query (P3+).
+   Cytoscape or react-force-graph showing seeded triples + top-mass
+   nodes + edge weights.
+5. **`/trace`** — Search-o1 iterative reasoning hops viewer (P5+). Per-
+   hop emitted query + retrieved passages (collapsible) +
+   Reason-in-Documents summary + running reasoning delta.
+6. **`/config`** — view current settings, indexes loaded, models
+   available (reads `GET /config`).
+
+**Component generation aid**: the project's MCP plugin set includes
+`mcp__magic__21st_magic_component_builder` which authors polished
+shadcn-style React components. For higher-order pages (Trace Viewer,
+Graph Visualizer) Claude may invoke that plugin during spec authoring
+to prototype the layout, then codex transcribes into the final tree.
 
 The showcase is judged not just by scoreboard numbers, but by the
 **reproducibility and intelligibility** of the live UI. A visitor
-clones, runs, picks a hard MuSiQue query, watches the graph + iterative
-reasoning hops, sees the answer, and understands why this stack does
-better than vanilla RAG. That visual + quantitative story is the
-showcase.
+clones, runs, picks a hard MuSiQue query, watches the graph +
+iterative reasoning hops, sees the answer with citations, and
+understands why this stack does better than vanilla RAG. That visual
++ quantitative story is the showcase.
 
 ---
 
