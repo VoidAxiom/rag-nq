@@ -173,8 +173,10 @@ if [ -n "$prev_main_sha" ] && [ "$prev_main_sha" != "$cur_main_sha" ]; then
       # case-insensitive) so we don't false-positive on stale mentions.
       voi_num=$(git -C "$REPO" log -1 --pretty='%B' "$full_sha" 2>/dev/null | python3 -c '
 import re, sys
+# Uppercase the matched VOI-N so case-variant closures ("closes voi-191")
+# normalize to the canonical uppercase form used in Linear + the merged_voi_list.
 m = re.search(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(VOI-[0-9]+)\b", sys.stdin.read(), re.IGNORECASE)
-print(m.group(1) if m else "")' 2>/dev/null)
+print(m.group(1).upper() if m else "")' 2>/dev/null)
       echo "  + $sha PR#${pr_num:-?} ${voi_num:-?}: $(echo "$subject" | cut -c1-60)"
       saw_merge="yes"
       [ -n "$voi_num" ] && merged_voi_list="$merged_voi_list $voi_num"

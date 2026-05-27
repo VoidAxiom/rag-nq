@@ -111,7 +111,10 @@ fi
 MERGED_TOKENS=" $(git log "$MAIN_REF" --pretty=format:'%B' 2>/dev/null \
                   | python3 -c '
 import re, sys
-toks = set(re.findall(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(VOI-[0-9]+)\b", sys.stdin.read(), re.IGNORECASE))
+# Uppercase the captured VOI-N so case-variant closures (e.g. "closes voi-191")
+# match the canonical uppercase PHASE_0_PACKETS keys; without this, mixed-case
+# bodies leak through as not-merged and trigger redundant redispatch.
+toks = {m.upper() for m in re.findall(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(VOI-[0-9]+)\b", sys.stdin.read(), re.IGNORECASE)}
 print(" ".join(sorted(toks)))' 2>/dev/null) "
 
 # Dispatched: `sk/voi-<n>-...` branches that exist locally OR on origin.
