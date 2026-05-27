@@ -93,15 +93,20 @@ title_of() {
 
 # ---- Detect merged + dispatched state -------------------------------------
 
-# Merged: VOI-N IDs in commit subjects on origin/main (or local main if
-# origin/main is missing). Tolerates either ref existing.
+# Merged: VOI-N IDs in commit bodies (full %B) on origin/main (or local
+# main if origin/main is missing). Per CLAUDE.md the squash-merge subject
+# is the conventional commit title (no VOI token) and `Closes VOI-N` lives
+# in the PR body, which `gh pr merge --squash` carries into the merge
+# commit body. Using %B (subject + body) catches both forms; %s (subject
+# only) misses the Closes-VOI trailer and lets already-merged packets
+# appear as dispatchable. Tolerates either ref existing.
 if git rev-parse --verify --quiet origin/main >/dev/null; then
   MAIN_REF=origin/main
 else
   MAIN_REF=main
 fi
 
-MERGED_TOKENS=" $(git log "$MAIN_REF" --pretty=format:'%s' 2>/dev/null \
+MERGED_TOKENS=" $(git log "$MAIN_REF" --pretty=format:'%B' 2>/dev/null \
                   | grep -oE 'VOI-[0-9]+' | sort -u | tr '\n' ' ') "
 
 # Dispatched: `sk/voi-<n>-...` branches that exist locally OR on origin.
