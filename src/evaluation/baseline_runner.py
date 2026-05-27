@@ -220,6 +220,7 @@ def run_baseline(
         relevance_contract=relevance_contract,
         max_queries=max_queries,
         output_path=output_path,
+        corpus_path=settings.index_chunks_path,
     )
 
     top_k = max(k_values)

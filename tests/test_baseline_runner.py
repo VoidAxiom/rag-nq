@@ -184,10 +184,11 @@ def test_run_baseline_calls_run_retrieval_evaluation_and_appends_row(
     )
     _patch_fast_latency_sample(monkeypatch)
 
+    settings = Settings()
     output_path = tmp_path / "eval.json"
     scoreboard_path = tmp_path / "scoreboard.json"
     report, row = run_baseline(
-        Settings(),
+        settings,
         max_queries=5,
         output_path=output_path,
         scoreboard_path=scoreboard_path,
@@ -205,6 +206,7 @@ def test_run_baseline_calls_run_retrieval_evaluation_and_appends_row(
     assert captured["kwargs"]["output_path"] == output_path
     assert captured["kwargs"]["modes"] == ["hybrid"]
     assert captured["kwargs"]["k_values"] == [1, 5, 10]
+    assert captured["kwargs"]["corpus_path"] == settings.index_chunks_path
     assert scoreboard_path.is_file()
     scoreboard = load_scoreboard(scoreboard_path)
     assert len(scoreboard.rows) == 1
@@ -215,6 +217,79 @@ def test_run_baseline_calls_run_retrieval_evaluation_and_appends_row(
     assert saved_row.notes is not None
     assert "latency_p50_p95_from_prefix_sample" in saved_row.notes
     assert "deadbeef" in saved_row.commit_sha
+
+
+def test_run_baseline_passes_explicit_corpus_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_report = _build_fake_report(query_count=10)
+    captured: dict[str, Any] = {}
+    settings = Settings()
+
+    def fake_run_retrieval_evaluation(*args: Any, **kwargs: Any) -> RetrievalEvalReport:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return fake_report
+
+    monkeypatch.setattr(
+        "src.evaluation.baseline_runner.run_retrieval_evaluation",
+        fake_run_retrieval_evaluation,
+    )
+    monkeypatch.setattr(
+        "src.evaluation.baseline_runner.resolve_commit_sha",
+        lambda repo_root=None: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    )
+
+    run_baseline(
+        settings,
+        max_queries=5,
+        output_path=tmp_path / "eval.json",
+        scoreboard_path=None,
+        phase="P0",
+        pipeline="hybrid+rerank",
+        benchmark="nq-retrieval",
+        split="dev",
+        modes=["hybrid"],
+        k_values=[1, 5, 10],
+        latency_sample_size=0,
+    )
+
+    assert captured["kwargs"]["corpus_path"] == settings.index_chunks_path
+
+
+def test_run_baseline_missing_index_chunks_propagates_filenotfound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_run_retrieval_evaluation(
+        *args: Any,
+        **kwargs: Any,
+    ) -> RetrievalEvalReport:
+        _ = args, kwargs
+        raise FileNotFoundError("Evaluation corpus does not exist: missing.jsonl")
+
+    monkeypatch.setattr(
+        "src.evaluation.baseline_runner.run_retrieval_evaluation",
+        fail_run_retrieval_evaluation,
+    )
+    monkeypatch.setattr(
+        "src.evaluation.baseline_runner.resolve_commit_sha",
+        lambda repo_root=None: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    )
+
+    with pytest.raises(FileNotFoundError, match="Evaluation corpus does not exist"):
+        run_baseline(
+            Settings(),
+            max_queries=5,
+            output_path=tmp_path / "eval.json",
+            scoreboard_path=None,
+            phase="P0",
+            pipeline="hybrid+rerank",
+            benchmark="nq-retrieval",
+            split="dev",
+            modes=["hybrid"],
+            k_values=[1, 5, 10],
+            latency_sample_size=0,
+        )
 
 
 def test_run_baseline_latency_sample_failure_falls_back_to_zero(
