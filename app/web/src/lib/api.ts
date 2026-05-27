@@ -8,7 +8,7 @@ import type {
   ScoreboardRow,
 } from '@/lib/types'
 
-const scoreboardPath = '/scoreboard'
+const scoreboardPath = '/api/scoreboard'
 
 export async function fetchScoreboard(): Promise<Scoreboard> {
   const response = await fetch(scoreboardEndpoint())

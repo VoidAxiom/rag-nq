@@ -20,7 +20,7 @@ def test_scoreboard_endpoint_returns_empty_state_for_missing_artifact(tmp_path: 
     scoreboard_path = tmp_path / "missing-scoreboard.json"
     client = _client(tmp_path, scoreboard_path)
 
-    response = client.get("/scoreboard")
+    response = client.get("/api/scoreboard")
 
     assert response.status_code == 200
     payload = response.json()
@@ -54,7 +54,7 @@ def test_scoreboard_endpoint_returns_populated_artifact(tmp_path: Path) -> None:
     add_row(row, path=scoreboard_path)
     client = _client(tmp_path, scoreboard_path)
 
-    response = client.get("/scoreboard")
+    response = client.get("/api/scoreboard")
 
     assert response.status_code == 200
     payload = response.json()

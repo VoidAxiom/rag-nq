@@ -137,7 +137,7 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return retrieval_response.model_copy(update={"grounded": grounded})
 
-    @app.get("/scoreboard", response_model=Scoreboard)
+    @app.get("/api/scoreboard", response_model=Scoreboard)
     def scoreboard() -> Scoreboard:
         path = scoreboard_path_factory() if scoreboard_path_factory else SCOREBOARD_PATH
         return load_scoreboard(path)
