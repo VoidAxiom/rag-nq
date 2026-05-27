@@ -301,7 +301,7 @@ verification is SUFFICIENT. Merge happens at AND, not OR.
 **End conditions.** Autonomy ends when:
 - P7 closes (the whole project is delivered per `docs/PLAN.md` master
   acceptance: master scoreboard rows populated, MuSiQue F1 target
-  hit live on primary, Streamlit comparator page reproducible from a
+  hit live on primary, React `/compare` comparator page reproducible from a
   clean clone), OR
 - A genuine spec-level decision arises that requires the user (see
   "Genuinely-blocking" above), OR

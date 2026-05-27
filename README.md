@@ -1,7 +1,7 @@
 # RAG NQ Showcase
 
 Local RAG demo on `sentence-transformers/NQ-retrieval` with Qdrant retrieval,
-FastAPI endpoints, and a Streamlit UI.
+FastAPI endpoints, and a Vite + React + TypeScript web UI.
 
 ## Setup
 
@@ -77,20 +77,39 @@ curl -s http://127.0.0.1:8000/query \
   | python -m json.tool
 ```
 
-## Run the Streamlit UI
+## Run the Web UI
 
-Start the API first, then run:
+Two modes — pick one.
+
+**Dev (with hot reload, Vite proxy → FastAPI):**
 
 ```bash
-uv run streamlit run app/streamlit_app.py
+cd app/web
+npm install   # first time only
+npm run dev
 ```
 
-The UI defaults to:
+Then open `http://localhost:5173`. Vite proxies `/api/*` to FastAPI on
+`http://127.0.0.1:8000`, so start the API in a separate terminal first.
 
-- API base URL: `http://127.0.0.1:8000`
-- Eval report path: `artifacts/retrieval_eval.json`
+**Production (FastAPI serves built bundle):**
 
-Both values can be changed in the Streamlit sidebar.
+```bash
+docker compose up -d qdrant
+(cd app/web && npm install && npm run build)
+RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn app.api.main:app
+```
+
+Then open `http://127.0.0.1:8000`. FastAPI serves the SPA at `/` and the
+JSON API at `/api/*`. The `(cd app/web && ...)` subshell keeps the outer
+shell at the repo root so `uvicorn`'s Python import path resolves
+`app.api.main` correctly and the `RAG_WEB_DIST_PATH` relative path
+resolves to `<repo>/app/web/dist`.
+
+Pages (more added per phase):
+
+- `/` — Home / Ask
+- `/scoreboard` — master sortable table reading `GET /api/scoreboard`
 
 ## Evaluate Retrieval
 
