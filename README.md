@@ -100,11 +100,13 @@ docker compose up -d qdrant
 RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn app.api.main:app
 ```
 
-Then open `http://127.0.0.1:8000`. FastAPI serves the SPA at `/` and the
-JSON API at `/api/*`. The `(cd app/web && ...)` subshell keeps the outer
-shell at the repo root so `uvicorn`'s Python import path resolves
-`app.api.main` correctly and the `RAG_WEB_DIST_PATH` relative path
-resolves to `<repo>/app/web/dist`.
+Then open `http://127.0.0.1:8000`. FastAPI serves the SPA at `/` (with
+SPA fallback for arbitrary React Router routes) alongside the existing
+JSON endpoints — `/health`, `/config`, `/retrieve`, `/query` at root
+plus `/api/scoreboard` under `/api`. The `(cd app/web && ...)` subshell
+keeps the outer shell at the repo root so `uvicorn`'s Python import path
+resolves `app.api.main` correctly and the `RAG_WEB_DIST_PATH` relative
+path resolves to `<repo>/app/web/dist`.
 
 Pages (more added per phase):
 
