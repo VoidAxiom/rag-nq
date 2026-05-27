@@ -93,10 +93,29 @@ def main() -> None:
         parser.add_argument("--phase", default="P0")
         parser.add_argument("--pipeline", default="hybrid+rerank")
         parser.add_argument("--benchmark", default="nq-retrieval")
-        parser.add_argument("--split", default="dev")
+        parser.add_argument(
+            "--split",
+            default="dev",
+            help=(
+                "Dataset split label for the scoreboard row. Must equal "
+                "settings.dataset_split (the split the corpus index was built from). "
+                "Default 'dev' matches the canonical NQ-dev baseline run; "
+                "if settings.dataset_split differs, the CLI errors out."
+            ),
+        )
         args = parser.parse_args()
 
         settings = Settings.from_env()
+        if args.split != settings.dataset_split:
+            parser.error(
+                f"--split={args.split!r} does not match "
+                f"settings.dataset_split={settings.dataset_split!r}; "
+                f"the corpus indexed at {settings.index_chunks_path} was built from the "
+                f"{settings.dataset_split!r} split. Either re-build the index against the "
+                f"{args.split!r} split, set DATASET_SPLIT={args.split} in the env, or pass "
+                f"--split={settings.dataset_split} to label the row truthfully."
+            )
+        print(f"Validated split={args.split} matches settings.dataset_split")
         report, row = run_baseline(
             settings,
             max_queries=args.max_queries,

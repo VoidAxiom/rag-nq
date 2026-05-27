@@ -100,6 +100,72 @@ def test_cli_accepts_latency_sample_size_zero(
     assert "latency_sample_max_queries" not in captured
 
 
+def test_cli_validates_split_matches_settings_dataset_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(lambda cls: cls(dataset_split="train")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(tmp_path / "eval.json"),
+            "--split",
+            "dev",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    with pytest.raises(SystemExit):
+        main()
+
+    stderr = capsys.readouterr().err
+    assert "dev" in stderr
+    assert "train" in stderr
+
+
+def test_cli_accepts_matching_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_report = _build_fake_report()
+    output_path = tmp_path / "eval.json"
+    scoreboard_path = tmp_path / "scoreboard.json"
+    _patch_cli_dependencies(monkeypatch, fake_report, dataset_split="train")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_p0_baseline",
+            "--max-queries",
+            "5",
+            "--output",
+            str(output_path),
+            "--scoreboard",
+            str(scoreboard_path),
+            "--split",
+            "train",
+        ],
+    )
+
+    from src.scripts.eval_p0_baseline import main
+
+    main()
+
+    scoreboard = load_scoreboard(scoreboard_path)
+    assert len(scoreboard.rows) == 1
+    assert scoreboard.rows[0].split == "train"
+
+
 def test_cli_no_append_scoreboard_flag_skips_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -215,6 +281,8 @@ def test_cli_rejects_latency_sample_size_negative(
 def _patch_cli_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     fake_report: RetrievalEvalReport,
+    *,
+    dataset_split: str = "dev",
 ) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
@@ -257,7 +325,11 @@ def _patch_cli_dependencies(
         "src.evaluation.baseline_runner.QdrantModeRetriever.retrieve",
         fake_retrieve,
     )
-    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: cls()))
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(lambda cls: cls(dataset_split=dataset_split)),
+    )
     return captured
 
 
