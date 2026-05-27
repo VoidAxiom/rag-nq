@@ -11,6 +11,7 @@ from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
 from app.api.schemas import (
@@ -79,9 +80,14 @@ def create_app(
         description="Local API for retrieval diagnostics and grounded RAG queries.",
     )
 
-    @app.get("/", response_model=RootResponse)
-    def root() -> RootResponse:
-        return RootResponse()
+    dist_path_env = os.environ.get("RAG_WEB_DIST_PATH")
+    dist_path = Path(dist_path_env).expanduser().resolve() if dist_path_env else None
+    spa_enabled = dist_path is not None and dist_path.is_dir()
+
+    if not spa_enabled:
+        @app.get("/", response_model=RootResponse)
+        def root() -> RootResponse:
+            return RootResponse()
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -142,11 +148,36 @@ def create_app(
         path = scoreboard_path_factory() if scoreboard_path_factory else SCOREBOARD_PATH
         return load_scoreboard(path)
 
-    dist_path_env = os.environ.get("RAG_WEB_DIST_PATH")
-    if dist_path_env:
-        dist_path = Path(dist_path_env).expanduser().resolve()
-        if dist_path.is_dir():
-            app.mount("/", StaticFiles(directory=dist_path, html=True), name="web")
+    if spa_enabled and dist_path is not None:
+        assets_path = dist_path / "assets"
+        if assets_path.is_dir():
+            app.mount(
+                "/assets",
+                StaticFiles(directory=assets_path),
+                name="web-assets",
+            )
+
+        @app.get(
+            "/{full_path:path}",
+            include_in_schema=False,
+            response_model=None,
+        )
+        def web_app(full_path: str) -> FileResponse | Response:
+            if full_path.startswith("api/"):
+                return Response(status_code=404)
+            if full_path.startswith("assets/"):
+                return Response(status_code=404)
+
+            requested_path = (dist_path / full_path).resolve()
+            if requested_path != dist_path and dist_path not in requested_path.parents:
+                return Response(status_code=404)
+            if requested_path.is_file():
+                return FileResponse(requested_path)
+
+            index_path = dist_path / "index.html"
+            if index_path.is_file():
+                return FileResponse(index_path, media_type="text/html")
+            return Response(status_code=404)
 
     return app
 
