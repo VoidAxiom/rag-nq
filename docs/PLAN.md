@@ -753,10 +753,14 @@ packet merges, `app/web/` and the FastAPI `GET /scoreboard` +
 StaticFiles mount do not exist on `main`)*: the React app will be
 served at runtime by FastAPI when `RAG_WEB_DIST_PATH` env var is set
 to `app/web/dist/`. In dev, `npm run dev` runs Vite at port 5173 with
-proxy to FastAPI on 8000. For one-command demo from a clean clone
-(post-VOI-247): `docker compose up qdrant && cd app/web && npm install
-&& npm run build && RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn
-app.api.main:app`.
+proxy to FastAPI on 8000. For one-command demo from a clean clone (post-VOI-247), run from the
+repo root: `docker compose up qdrant && (cd app/web && npm install &&
+npm run build) && RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn
+app.api.main:app`. The `(cd app/web && ...)` subshell keeps the
+outer shell at the repo root so `uvicorn`'s Python import path
+resolves the `app.api.main` package correctly AND the
+`RAG_WEB_DIST_PATH` relative path resolves to `<repo>/app/web/dist`
+rather than `<repo>/app/web/app/web/dist`.
 
 **Pages** (routes; each lands in its phase's packet):
 
