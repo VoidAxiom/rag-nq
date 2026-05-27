@@ -14,6 +14,7 @@ import streamlit as st  # noqa: E402
 from app.ui.api_client import ApiClientError, RagApiClient, RetrievalMode  # noqa: E402
 from app.ui.display import answer_display_text, hit_rank_summary, hit_title  # noqa: E402
 from app.ui.eval_report import load_eval_report, rows_as_dicts, summarize_eval_report  # noqa: E402
+from app.ui.scoreboard_page import render_scoreboard_page  # noqa: E402
 from src.models.query_schemas import PassageHit, QueryResponse  # noqa: E402
 
 MODES: tuple[RetrievalMode, RetrievalMode, RetrievalMode] = ("dense", "sparse", "hybrid")
@@ -21,6 +22,12 @@ MODES: tuple[RetrievalMode, RetrievalMode, RetrievalMode] = ("dense", "sparse", 
 
 def main() -> None:
     st.set_page_config(page_title="RAG NQ Showcase", layout="wide")
+    home_page = st.Page(_render_home_page, title="Home / Ask", default=True)
+    scoreboard_page = st.Page(render_scoreboard_page, title="Scoreboard")
+    st.navigation([home_page, scoreboard_page]).run()
+
+
+def _render_home_page() -> None:
     st.title("RAG NQ Showcase")
     st.caption("Streamlit demo over the FastAPI surface and persisted eval artifacts.")
 
