@@ -15,7 +15,7 @@ HOOK_IN="$IN" python3 - <<'PY' 2>/dev/null || true
 import json, os, subprocess, sys
 
 LINEAR_PROJECT = "rag_nq"
-COMMAND_CENTER = "VOI-1"
+COMMAND_CENTER = "VOI-243"
 
 
 def git(cwd, *a):

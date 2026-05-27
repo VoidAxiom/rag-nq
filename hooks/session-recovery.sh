@@ -22,5 +22,5 @@ if [ -n "$OUT" ]; then
 fi
 
 # Loud fallback — never silent-empty.
-printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"↻ CONTEXT-RECOVERY (fallback: recovery helper unavailable). Before planning or acting you MUST: read Linear project rag_nq description + In-Progress issues + VOI-1 and its latest comment; load a linear-interface skill if present, else MEMORY.md. FIRST output line must be exactly: ↻ RESUME-ACK source=? branch=? started=<N> (N = In-Progress issue count you actually found). Linear unreachable -> DEGRADED MODE on git+MEMORY.md, say so, started=UNAVAILABLE. Absent ack = reflex failed; investigate before continuing."}}'
+printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"↻ CONTEXT-RECOVERY (fallback: recovery helper unavailable). Before planning or acting you MUST: read Linear project rag_nq description + In-Progress issues + VOI-243 (command center) and its latest comment; load a linear-interface skill if present, else MEMORY.md. FIRST output line must be exactly: ↻ RESUME-ACK source=? branch=? started=<N> (N = In-Progress issue count you actually found). Linear unreachable -> DEGRADED MODE on git+MEMORY.md, say so, started=UNAVAILABLE. Absent ack = reflex failed; investigate before continuing."}}'
 exit 0

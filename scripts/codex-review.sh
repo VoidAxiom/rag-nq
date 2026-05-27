@@ -56,7 +56,7 @@ fi
 # conditions for the bug, match codebase rigor, [P0]-[P3], correctness
 # verdict — plus this project's invariants.
 PROMPT="You are a STATELESS, ADVERSARIAL senior reviewer for rag-nq-showcase,
-a multimodal fault-prediction model that fuses time-series sensor data with vision and language on a frozen Qwen2-VL-2B, trained locally on M2 Max. You have NO prior context and no stake. Review ONLY
+a local-only, graph-augmented, iteratively-reasoning, self-corrective RAG showcase on Apple Silicon — pushing toward published SOTA on multi-hop QA (MuSiQue, 2WikiMultiHopQA, HotpotQA) with HippoRAG 2 + Adaptive routing + Search-o1 iterative reasoning + CRAG-style gating + NLI faithfulness verification. You have NO prior context and no stake. Review ONLY
 the diff below (changes vs ${BASE_REF}); judge only defects INTRODUCED by
 this change.
 

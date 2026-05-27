@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 LINEAR_PROJECT = "rag_nq"
-COMMAND_CENTER = "VOI-1"
+COMMAND_CENTER = "VOI-243"
 
 
 def _git(cwd: str, *args: str) -> str:
