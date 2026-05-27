@@ -430,3 +430,34 @@ def test_build_embedder_qwen3_apple_silicon(monkeypatch) -> None:
     out = embedder.encode(["hello"])
     assert out.dtype == np.float32
     assert out.shape == (1, 2560)
+
+
+def test_float32_wrapper_omits_batch_size_when_none() -> None:
+    """Regression for VOI-249: the wrapper must NOT forward batch_size=None
+    to SentenceTransformer.encode, which rejects None with a TypeError
+    on '<=' check.
+
+    Surfaced live on primary main after VOI-245 (PR #5) merged; the
+    smoke `e.encode(['hello'])` (no batch_size kwarg) crashed before
+    reaching the model.
+    """
+    import numpy as np
+
+    from src.retrieval.dense_index import _Float32EncoderWrapper
+
+    captured: dict[str, object] = {}
+
+    class _FakeEncoder:
+        def encode(self, texts, **kwargs):
+            captured.update(kwargs)
+            return np.zeros((len(texts), 4), dtype=np.float16)
+
+    wrapper = _Float32EncoderWrapper(_FakeEncoder())
+    out = wrapper.encode(["hello"])  # no batch_size kwarg
+
+    assert "batch_size" not in captured, captured
+    # Sanity: normalize_embeddings IS forwarded as a real value (default True).
+    assert captured.get("normalize_embeddings") is True, captured
+    # Sanity: wrapper still satisfies the float32 contract.
+    assert out.dtype == np.float32
+    assert out.shape == (1, 4)

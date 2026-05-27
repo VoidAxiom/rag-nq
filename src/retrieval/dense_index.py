@@ -58,13 +58,12 @@ class _Float32EncoderWrapper:
         normalize_embeddings: bool = True,
         **kwargs: Any,
     ) -> np.ndarray:
-        arr = self._inner.encode(
-            texts,
-            batch_size=batch_size,
-            normalize_embeddings=normalize_embeddings,
-            **kwargs,
-        )
-        return arr.astype(np.float32, copy=False)
+        call_kwargs: dict[str, Any] = {"normalize_embeddings": normalize_embeddings}
+        if batch_size is not None:
+            call_kwargs["batch_size"] = batch_size
+        call_kwargs.update(kwargs)
+        arr = self._inner.encode(texts, **call_kwargs)
+        return np.asarray(arr).astype(np.float32, copy=False)
 
     def get_sentence_embedding_dimension(self) -> int:
         return int(self._inner.get_sentence_embedding_dimension())
