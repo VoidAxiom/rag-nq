@@ -264,13 +264,73 @@ When Claude approves:
   ```bash
   git rev-parse HEAD   # must equal the SHA Claude approved
   ```
-- Create the PR:
+- Create the PR with the **spec-anchored body** below. A bare
+  "Summary + Test plan" body lets the reviewer roam and produces
+  scope-creeping P2/P3 findings on every iteration — putting the
+  spec verbatim into the PR body gives the reviewer (Codex / Cursor /
+  any future bot) an explicit ceiling to check the diff against, and
+  gives YOU an authoritative `## Out of scope` list to cite when
+  rejecting over-spec findings in step 8.
+
+  **PR body — required structure (in this exact order):**
+
+  ```markdown
+  Closes VOI-N
+
+  ## Spec (verbatim from <source-file> § "<section>")
+
+  <Paste the verbatim source-of-truth block — typically the same pull-quote
+  the packet `spec.md` already carries from `docs/PLAN.md` §5.X or wherever
+  the source spec lives. This MUST be a verbatim copy, not a paraphrase.
+  Quote multiple sections if your packet touches more than one.>
+
+  ## Out of scope
+
+  <Bullet list of behaviors the spec deliberately excludes — typically
+  the same list as the packet spec.md's "## Out-of-scope" section.
+  Each bullet becomes a citable rejection target for over-spec findings
+  in step 8. If your packet spec doesn't list deferrals, STOP and ask
+  the director before opening the PR.>
+
+  - <out-of-scope item 1>
+  - <out-of-scope item 2>
+  - ...
+
+  ## Files
+
+  <The packet allowlist verbatim from `.codex-runs/<packet-id>/scope.txt`.
+  Helps the reviewer understand which files you were authorized to touch.>
+
+  - <file 1>
+  - <file 2>
+  - ...
+
+  ## Gates
+
+  <Measured acceptance — one-line outputs of every gate that PASSED.>
+
+  - `uv run ruff check` → clean (N files).
+  - `uv run pytest` → X passed, Y skipped.
+  - `/code-review --effort high` (local) → VERDICT: correct (or `NO BLOCKING ISSUES`).
+  - `bash scripts/impl-precommit-scope.sh` (staged) → exit 0; all N path(s) within role scope.
+  - <any project-specific runtime smoke from the spec's Acceptance — Runtime verification block>
+
+  ## Codex-run artifacts
+
+  - `.codex-runs/<packet-id>-r1/` ...
+  - `.codex-runs/<packet-id>-r2/` ...
+  ```
+
+  Then create the PR:
+
   ```bash
   gh pr create --base main --head <your-branch> \
     --title "<conventional commit subject>" \
-    --body "..."
+    --body "$(cat <<'EOF'
+  <the body above, filled in>
+  EOF
+  )"
   ```
-- The PR body MUST contain: `Closes VOI-N`, measured acceptance summary, gate output, files touched, scope notes.
 
 **No `Co-Authored-By`, no "🤖", no "Generated with Claude Code", no Claude/Anthropic credit footer anywhere** in commit messages, PR title, or PR body.
 
@@ -311,6 +371,34 @@ The re-trigger discipline is now anchored on the 👀 reaction state, not on a w
 
 When codex returns findings (inline review comments with severity badges):
 
+**Triage FIRST, before fixing anything.** For each finding, ask: **does the
+behavior the finding asks for appear in the PR body's `## Spec` block
+verbatim, or would addressing it expand scope beyond what the spec describes?**
+
+- **P0 / P1 (real bugs — correctness, security, contract violations
+  the spec promises and the code breaks)**: fix regardless of whether the
+  spec mentions them. A crash is a crash; a typed contract violation is
+  a bug. Proceed to step 8a below.
+- **P2 / P3 that maps to behavior in `## Spec` verbatim**: fix. The
+  spec asks for it; the reviewer is right to flag the gap.
+- **P2 / P3 that exceeds `## Spec` (asks for "more rigorous" patterns,
+  defensive checks the spec doesn't ask for, hardening for hypothetical
+  edge cases, test-code "improvements" that just give the next review
+  round more surface to find issues on)**: **REJECT.** Cite the PR
+  body's `## Out of scope` entry verbatim in the §8e re-trigger's
+  "Not changed deliberately" block. Don't silently expand scope to
+  address a finding the spec doesn't require — test-code iteration
+  has no natural floor, and every "improvement" gives the next round
+  more surface for the reviewer to find issues on. **The spec verbatim
+  is the only durable stop signal.**
+- **P2 / P3 that's genuinely out of scope but NOT yet listed in the PR
+  body's `## Out of scope`**: STOP and escalate to Claude. The spec
+  may need an additional deferral; Claude updates the spec, then you
+  update the PR body, then you reject. Don't invent rationale on the
+  fly — the rationale must trace to the PR body.
+
+After triage, proceed to fix only the items that survived triage.
+
 a. Fix the findings in your worktree (back to step 2 → 3 → 4 within your branch, then the staged scope/commit part of step 5; you do NOT re-enter Claude's pre-PR scope-check loop because the findings are codex's, not Claude's).
 
 b. Stage only explicit files in your declared packet allowlist, rerun the staged ROLE scope gate, and commit the fix:
@@ -350,9 +438,14 @@ e. Post a **new** review-request comment that LEADS with `@codex review` and the
 
    **Not changed (deliberate — explanation for the reviewer):**
 
-   - <thread-id-or-summary>: <one-line rationale — usually "spec design;
-     accepted by Claude (director). See <file>:<line> for the inline
-     comment documenting why.">
+   - <thread-id-or-summary>: <quote the matching bullet from the PR body's
+     `## Out of scope` section VERBATIM — that's the authoritative
+     rationale. Don't invent fresh rationale per re-review; the spec is
+     the source of truth and the PR body's `## Out of scope` is its
+     reviewer-facing surface. If a finding maps to genuinely-out-of-scope
+     behavior but NOT yet listed in `## Out of scope`, STOP and escalate
+     to Claude — spec update first, then PR body update, THEN reject.>
+   - <thread-id-or-summary>: <same pattern: verbatim quote from `## Out of scope`>
 
    (Omit either section if it would be empty. If every finding was
    addressed, include only "Changes" and a trailing line: "No findings
@@ -362,6 +455,13 @@ e. Post a **new** review-request comment that LEADS with `@codex review` and the
    ```
 
    Why this matters: a bare `@codex review` after a fix iteration makes the reviewer re-derive what changed from the diff alone, often re-raising the same architectural finding for the third time. A short "what changed / what didn't and why" block lets the reviewer focus on whether the NEW diff introduced regressions and skip the deliberately-accepted findings.
+
+   Citing `## Out of scope` verbatim (not paraphrased) matters because
+   the bot reads the PR body too; it learns to recognize "this is
+   covered by section X of the body" and stops re-raising. A
+   freshly-invented rationale per re-review reads as ad-hoc to the
+   reviewer and is less likely to stop the next round from re-finding
+   the same thing.
 
    Claude's reviewer role is exercised LOCALLY in step 4 (`/code-review --effort high`) — there is no `@claude review` PR comment.
 
