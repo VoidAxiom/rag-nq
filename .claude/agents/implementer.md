@@ -397,7 +397,20 @@ verbatim, or would addressing it expand scope beyond what the spec describes?**
   update the PR body, then you reject. Don't invent rationale on the
   fly — the rationale must trace to the PR body.
 
-After triage, proceed to fix only the items that survived triage.
+**REJECTED threads still need to be resolved.** `review-gate.sh wait`
+requires zero unresolved Codex threads to reach the merge gate. After
+posting the §8e re-trigger with the verbatim `## Out of scope` citation
+for a rejected finding, RESOLVE the thread via
+`bash scripts/review-gate.sh resolve <thread-id>` — same `resolve`
+call as for fixed findings. The thread is "addressed" either by code
+change (fix) or by documented rejection (rationale); both forms close
+the thread so the merge gate can clear. Without this, a legitimate
+rejection leaves the thread open and the PR can never reach
+REVIEWED-CLEAN.
+
+After triage, proceed to fix only the items that survived triage —
+AND resolve all rejected-thread IDs at step 8d alongside the
+fixed-thread IDs.
 
 a. Fix the findings in your worktree (back to step 2 → 3 → 4 within your branch, then the staged scope/commit part of step 5; you do NOT re-enter Claude's pre-PR scope-check loop because the findings are codex's, not Claude's).
 
@@ -414,13 +427,19 @@ b. Stage only explicit files in your declared packet allowlist, rerun the staged
 
 c. Push the new commits.
 
-d. **Resolve the prior codex review threads** that you just addressed. The merge gate requires zero unresolved codex threads, so each iteration MUST close out the threads it just fixed:
+d. **Resolve the prior codex review threads** — both the threads you
+   fixed (via codex r-N) AND the threads you rejected as out-of-scope
+   (per the triage discipline above; rejection rationale lives in the
+   §8e block, but the thread itself MUST still be `resolve`d so the
+   merge gate clears). The merge gate requires zero unresolved codex
+   threads, so each iteration MUST close out every thread it addressed
+   — whether by fix or by documented rejection:
 
    ```bash
    # List the unresolved codex threads:
    bash scripts/review-gate.sh threads <PR#>
 
-   # Resolve each addressed thread by ID:
+   # Resolve each addressed thread by ID (fixes AND rejects):
    bash scripts/review-gate.sh resolve <thread_id>
    ```
 
