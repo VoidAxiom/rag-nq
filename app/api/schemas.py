@@ -81,7 +81,7 @@ class RuntimeConfigResponse(BaseModel):
 
     dataset_name: str
     dataset_split: str
-    embedding_model_name: str
+    embedder_name: str
     qdrant_url: str
     qdrant_collection: str
     qdrant_vector_name: str

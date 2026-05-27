@@ -118,6 +118,7 @@ def _build_settings(tmp_path: Path, *, collection: str, max_passages: int | None
         dataset_split="train",
         max_passages=max_passages,
         ingest_show_progress=False,
+        rerank_enabled=False,
         dense_read_batch_lines=2,
         sparse_upsert_batch_size=2,
         sparse_workers=1,

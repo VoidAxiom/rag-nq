@@ -17,6 +17,7 @@ from src.models.query_schemas import (
     RetrievalMetrics,
     RetrievalStageTimings,
 )
+from src.retrieval.dense_index import Embedder, build_embedder
 from src.retrieval.rerank import (
     CrossEncoderLike,
     build_default_cross_encoder,
@@ -30,14 +31,6 @@ from src.retrieval.sparse_qdrant import (
 )
 
 LOGGER = logging.getLogger(__name__)
-
-
-class QueryEmbeddingModel(Protocol):
-    """Embedding protocol required by dense query-time retrieval."""
-
-    def encode(
-        self, texts: list[str], *, batch_size: int, normalize_embeddings: bool
-    ) -> list[list[float]]: ...
 
 
 class QdrantQueryClientLike(Protocol):
@@ -63,7 +56,7 @@ class DenseQdrantRetriever:
 
     settings: Settings
     client: QdrantQueryClientLike | None = None
-    model: QueryEmbeddingModel | None = None
+    model: Embedder | None = None
 
     def __post_init__(self) -> None:
         if self.client is None:
@@ -72,7 +65,7 @@ class DenseQdrantRetriever:
                 timeout=self.settings.qdrant_retrieval_timeout_seconds,
             )
         if self.model is None:
-            self.model = _build_default_embedding_model(self.settings.embedding_model_name)
+            self.model = build_embedder(self.settings.embedder_name)
 
     def retrieve(self, query: str, top_k: int) -> list[PassageHit]:
         vector = _encode_query_vector(self.model, query)
@@ -310,26 +303,20 @@ def _build_default_qdrant_client(url: str, *, timeout: float) -> Any:
         return QdrantClient(url=url, timeout=timeout)
 
 
-def _build_default_embedding_model(model_name: str) -> QueryEmbeddingModel:
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "sentence-transformers is required for dense retrieval. Install dependencies first."
-        ) from exc
-    return SentenceTransformer(model_name)
-
-
-def _encode_query_vector(model: QueryEmbeddingModel, query: str) -> list[float]:
+def _encode_query_vector(model: Embedder, query: str) -> list[float]:
     encode = cast(Any, model.encode)
     if _accepts_keyword(encode, "show_progress_bar"):
-        return encode(
+        arr = encode(
             [query],
             batch_size=1,
             normalize_embeddings=True,
             show_progress_bar=False,
         )[0]
-    return model.encode([query], batch_size=1, normalize_embeddings=True)[0]
+    else:
+        arr = model.encode([query], batch_size=1, normalize_embeddings=True)[0]
+    if hasattr(arr, "tolist"):
+        return list(arr.tolist())
+    return list(arr)
 
 
 def _accepts_keyword(callable_object: Any, keyword: str) -> bool:

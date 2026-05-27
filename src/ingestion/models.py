@@ -296,7 +296,7 @@ class IndexBuildManifest(_DataclassModel):
 
     dataset_name: str
     dataset_split: str
-    embedding_model_name: str
+    embedder_name: str
     passage_count: int
     qdrant_collection: str
     sparse_index_path: str

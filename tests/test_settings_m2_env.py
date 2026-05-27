@@ -134,3 +134,21 @@ def test_from_env_loads_dotenv_without_overriding_shell_env(
     assert s.generation_provider == "heuristic"
     assert os.getenv("OPENAI_API_KEY") == "from_shell_secret"
     assert os.getenv("LOCAL_PROXY_KEY") == "from_dotenv_proxy_secret"
+
+
+def test_from_env_embedder_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RAG_EMBEDDER_NAME overrides Settings.embedder_name."""
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RAG_EMBEDDER_NAME", "Qwen/Qwen3-Embedding-4B")
+    s = Settings.from_env()
+    assert s.embedder_name == "Qwen/Qwen3-Embedding-4B"
+
+
+def test_default_settings_use_qwen3_and_bge_reranker() -> None:
+    """Default settings select Qwen3-Embedding-4B + BGE-reranker-v2-m3 + rerank on."""
+
+    s = Settings()
+    assert s.embedder_name == "Qwen/Qwen3-Embedding-4B"
+    assert s.rerank_model_name == "BAAI/bge-reranker-v2-m3"
+    assert s.rerank_enabled is True
