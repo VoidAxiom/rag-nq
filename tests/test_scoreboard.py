@@ -62,6 +62,42 @@ def test_retrieval_only_row_roundtrip(tmp_path: Path) -> None:
     assert scoreboard.rows[0].quality_metrics is None
 
 
+def test_retrieval_only_models_omit_llm_fields(tmp_path: Path) -> None:
+    path = tmp_path / "scoreboard.json"
+    models = ModelSet(
+        embedder="Qwen3-Embedding-4B",
+        reranker="BGE-reranker-v2-m3",
+    )
+    row = ScoreboardRow(
+        phase="P0",
+        pipeline="retrieval-only",
+        benchmark="nq",
+        split="dev",
+        retriever_metrics=RetrieverMetrics(
+            recall_at_1=0.43,
+            recall_at_5=0.72,
+            recall_at_10=0.81,
+            mrr_at_10=0.55,
+            ndcg_at_10=0.62,
+        ),
+        answer_metrics=None,
+        quality_metrics=None,
+        latency_ms=LatencyMs(
+            p50=1240,
+            p95=2810,
+        ),
+        models=models,
+        commit_sha="abcdef1234567890",
+        notes="retrieval-only row",
+    )
+
+    add_row(row, path)
+    scoreboard = load_scoreboard(path)
+
+    assert scoreboard.rows[0].models.reasoning_llm is None
+    assert scoreboard.rows[0].models.verifier is None
+
+
 def test_add_row_appends_not_replaces(tmp_path: Path) -> None:
     path = tmp_path / "scoreboard.json"
     row_a = _sample_row(phase="P3", commit_sha="abcdef1234567890", notes="first")

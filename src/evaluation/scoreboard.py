@@ -56,14 +56,23 @@ class LatencyMs(BaseModel):
 
 
 class ModelSet(BaseModel):
-    """Model identifiers used for one benchmark/config row."""
+    """Model identifiers used for one benchmark/config row.
+
+    PLAN.md §6 shows the example schema with all four model fields populated
+    for a P3 HippoRAG row. PLAN.md §5.0 makes generation conditional ("when
+    generation is enabled"), so `reasoning_llm` and `verifier` are Optional
+    for retrieval-only baselines such as P0 `src/scripts/eval_retrieval.py`
+    without inventing placeholder LLM identifiers. That mirrors avoiding fake
+    EM/F1 for retrieval-only rows; `embedder` and `reranker` remain required
+    retrieval primitives present in every config.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     embedder: str
     reranker: str
-    reasoning_llm: str
-    verifier: str
+    reasoning_llm: str | None = None
+    verifier: str | None = None
 
 
 class ScoreboardRow(BaseModel):
