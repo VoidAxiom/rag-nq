@@ -153,16 +153,26 @@ build loop wastes the autonomy they granted; trusting "tests passed +
 PR merged" as proof of fitness-for-purpose violates the mantra above.
 
 **The sidecar rail.** `scripts/autonomous-sidecar.sh` is the source-of-
-truth state surveyor. It prints `=== PRIMARY ===` / `=== WORKTREES ===`
-/ `=== OPEN PRS ===` / `=== LINEAR ===` / `=== ACTIONS PENDING ===`
-blocks reflecting:
-- Primary main HEAD + uncommitted state + live container roster
-  (`docker ps` for the Qdrant container + any others).
-- Every per-packet worktree's branch + HEAD + ahead/behind/dirty +
-  pushed-state + codex-run slice/review activity.
-- Every open PR's review-gate verdict (CLEAN / BLOCKED /
-  CLEAN-COMMENT-MANUAL) + unresolved thread count.
-- A heuristic "actions pending" list synthesized from the above.
+truth state surveyor. Each tick emits, in this order:
+- A header `=== AUTONOMOUS sidecar tick @ HH:MM:SS ===` plus the mantra
+  above (printed in full atop every tick).
+- A `primary: <short-sha> <subject>` line reflecting `origin/main`'s
+  current HEAD.
+- (Optional) `merged since last tick:` block listing PR-driven squash
+  merges that landed since the previous tick — each line carries the
+  short SHA, PR number, and any `VOI-N` token parsed from the merge-
+  commit body (`%B`). Newly-merged VOI items become `ACT-NOW` items.
+- A `packets:` block listing each per-packet worktree under
+  `<repo-parent>/.rag-nq-showcase-worktrees/` with one summary line per
+  worktree (branch, HEAD short SHA, ahead-count, pushed-state, plus PR
+  number + gate verdict + open-thread count + 👀-ack state when a PR
+  exists) and one decision line tagged `ACT-NOW`, `VERIFY`, or
+  `NO-ACTION`. Plus a second pass for any open PR not backed by a
+  worktree (director-owned doc/CI PRs from primary).
+- A `tick summary: X ACT-NOW, Y VERIFY, Z NO-ACTION (in-flight)` line.
+- For newly-merged work this tick: a `→ ACT-NOW (newly merged VOI):`
+  follow-on that lists every unblocked Linear issue to live-verify and
+  dispatch.
 
 **Cadence + socket-error retry.** The cron fires in CLUSTERED TRIPLETS
 every 20 min — three ticks at 1-min spacing per cycle:
@@ -195,7 +205,8 @@ per `docs/PLAN.md` §5) are complete and live-verified on primary.
 
 Each sidecar tick, Claude:
 1. Runs the sidecar; reads the output.
-2. For each item in `ACTIONS PENDING`, takes the action **immediately**
+2. For each `ACT-NOW`-tagged line in the `packets:` block (plus any
+   `→ ACT-NOW (newly merged VOI):` follow-on), takes the action **immediately**
    without asking for confirmation, per the standing autonomy boundary.
    Concretely:
    - "PR #N has unresolved codex thread(s) — impl iteration owed" →
