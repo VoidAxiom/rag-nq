@@ -62,6 +62,23 @@ def test_retrieval_only_row_roundtrip(tmp_path: Path) -> None:
     assert scoreboard.rows[0].quality_metrics is None
 
 
+def test_row_notes_optional_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "scoreboard.json"
+    row = _sample_row(
+        phase="P0",
+        pipeline="retrieval-only",
+        benchmark="nq",
+        split="dev",
+        notes=None,
+    ).model_copy(update={"answer_metrics": None, "quality_metrics": None})
+
+    add_row(row, path)
+    scoreboard = load_scoreboard(path)
+
+    assert scoreboard.rows == [row]
+    assert scoreboard.rows[0].notes is None
+
+
 def test_retrieval_only_models_omit_llm_fields(tmp_path: Path) -> None:
     path = tmp_path / "scoreboard.json"
     models = ModelSet(
@@ -179,7 +196,7 @@ def _sample_row(
     benchmark: str = "musique-ans",
     split: str = "dev",
     commit_sha: str = "abcdef1234567890",
-    notes: str = "sample row",
+    notes: str | None = "sample row",
 ) -> ScoreboardRow:
     return ScoreboardRow(
         phase=phase,

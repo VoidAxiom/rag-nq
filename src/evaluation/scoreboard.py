@@ -90,7 +90,7 @@ class ScoreboardRow(BaseModel):
     latency_ms: LatencyMs
     models: ModelSet
     commit_sha: str
-    notes: str
+    notes: str | None = None
 
 
 class Scoreboard(BaseModel):
