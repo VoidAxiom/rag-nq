@@ -54,6 +54,25 @@ def _make_passages(count: int, *, prefix: str = "p") -> list[Passage]:
     ]
 
 
+def _make_row_passages(
+    *, rows: int, paragraphs_per_row: int, prefix: str = "musique"
+) -> list[Passage]:
+    passages: list[Passage] = []
+    for row_idx in range(rows):
+        for para_idx in range(paragraphs_per_row):
+            passages.append(
+                Passage(
+                    passage_id=f"{prefix}-row{row_idx}-{para_idx}",
+                    text=f"text {row_idx}/{para_idx}",
+                    title=f"title {row_idx}/{para_idx}",
+                    source=f"source {row_idx}/{para_idx}",
+                    question=f"q {row_idx}?",
+                    long_answers=[f"a {row_idx}/{para_idx}"],
+                )
+            )
+    return passages
+
+
 def _patch_loader(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -153,6 +172,110 @@ def test_jsonl_written_at_per_benchmark_path_with_index_chunk_shape(
         uuid.UUID(obj["chunk_id"])
     for line in lines:
         IndexChunk.model_validate_json(line)
+
+
+def test_sample_size_caps_hf_row_iterator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    passages = _make_row_passages(rows=10, paragraphs_per_row=3)
+    _patch_loader(monkeypatch, passages=passages, expected_count=len(passages))
+
+    ingest_multihop.main(["--dataset", "musique", "--sample-size", "4", "--dry-run"])
+
+    jsonl_path = tmp_path / "multihop_passages__musique.jsonl"
+    lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 12
+    objects = [json.loads(line) for line in lines]
+    assert [obj["group_id"] for obj in objects] == [
+        "musique-row0-0",
+        "musique-row0-1",
+        "musique-row0-2",
+        "musique-row1-0",
+        "musique-row1-1",
+        "musique-row1-2",
+        "musique-row2-0",
+        "musique-row2-1",
+        "musique-row2-2",
+        "musique-row3-0",
+        "musique-row3-1",
+        "musique-row3-2",
+    ]
+
+
+def test_sample_size_suppresses_anomaly_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    passages = _make_row_passages(rows=5000, paragraphs_per_row=1)
+    _patch_loader(monkeypatch, passages=passages, expected_count=100_000)
+
+    with caplog.at_level(logging.INFO):
+        ingest_multihop.main(
+            ["--dataset", "musique", "--sample-size", "5000", "--dry-run"]
+        )
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "reconcile" and record.levelno == logging.WARNING
+    ]
+    assert warning_records == []
+    sampled_reconcile_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "reconcile"
+        and record.levelno == logging.INFO
+    ]
+    assert len(sampled_reconcile_records) == 1
+    assert (
+        "mode=sampled actual_passage_count=5000 sample_size=5000"
+        in sampled_reconcile_records[0].getMessage()
+    )
+
+
+def test_full_corpus_preserves_anomaly_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        _run_dry_ingest(monkeypatch, tmp_path, actual_count=400, expected_count=1000)
+
+    anomaly_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "reconcile" and record.levelno == logging.WARNING
+    ]
+    assert any(
+        "anomaly=true reason=ratio_out_of_band ratio=0.4000" in record.getMessage()
+        for record in anomaly_records
+    )
+
+
+def test_sample_size_emits_sample_log_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    passages = _make_row_passages(rows=5000, paragraphs_per_row=1)
+    _patch_loader(monkeypatch, passages=passages, expected_count=100_000)
+
+    with caplog.at_level(logging.INFO):
+        ingest_multihop.main(
+            ["--dataset", "musique", "--sample-size", "5000", "--dry-run"]
+        )
+
+    sample_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "sample" and record.levelno == logging.INFO
+    ]
+    assert len(sample_records) == 1
+    assert "sample_size=5000" in sample_records[0].getMessage()
 
 
 def test_passage_to_index_chunk_conversion_shape() -> None:
