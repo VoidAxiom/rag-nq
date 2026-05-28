@@ -65,6 +65,9 @@ _TIER_1_OVERRIDE_TYPES: dict[str, type] = {
     "generation_provider": str,
     "generation_model_name": str,
 }
+_SUPPORTED_GENERATION_PROVIDERS: frozenset[str] = frozenset(
+    {"heuristic", "http_json", "openai"}
+)
 OPENAI_OVERRIDE_ERROR = (
     "OpenAI generator requires both RAG_OPENAI_API_KEY and RAG_OPENAI_OPT_IN=1 to be set."
 )
@@ -393,6 +396,18 @@ def _build_effective_settings(app_settings: Settings, request: QueryApiRequest) 
                         f"got {type(value).__name__}."
                     ),
                 )
+
+    if "generation_provider" in overrides:
+        provider_value = overrides["generation_provider"]
+        if provider_value not in _SUPPORTED_GENERATION_PROVIDERS:
+            supported = ", ".join(sorted(_SUPPORTED_GENERATION_PROVIDERS))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Override 'generation_provider' must be one of: {supported}; "
+                    f"got {provider_value!r}."
+                ),
+            )
 
     if overrides.get("generation_provider") == "openai":
         openai_enabled, _disabled_reason = _openai_availability()

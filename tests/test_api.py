@@ -866,3 +866,43 @@ def _client_with_answer(tmp_path: Path, *, answer: str) -> TestClient:
         generator_factory=lambda settings: FixedAnswerGenerator(answer=answer),
     )
     return TestClient(app)
+
+
+def test_query_rejects_unsupported_generation_provider_value(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {"generation_provider": "bogus"},
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "generation_provider" in detail
+    assert "bogus" in detail
+    assert "heuristic" in detail
+    assert "http_json" in detail
+    assert "openai" in detail
+
+
+def test_query_accepts_http_json_generation_provider_override(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {"generation_provider": "http_json"},
+        },
+    )
+
+    assert response.status_code == 200
