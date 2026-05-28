@@ -8,6 +8,7 @@ dependencies = [
     "datasets>=2.20.0",
     "tqdm>=4.66.0",
     "numpy>=1.26.0",
+    "psutil>=5.9.0",
     "pydantic>=2.7.0",
     "qdrant-client>=1.13.0,<1.14",
     "rank-bm25>=0.2.2",
