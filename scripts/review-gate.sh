@@ -51,7 +51,7 @@ REPO="$(printf '%s' "$repo_json" | python3 -c 'import json,sys;print(json.load(s
 # never lost no matter how many replies a thread accrues; `recent` = the tail
 # (latest state, e.g. a fix reply). Codex re-reviews land as NEW threads, so
 # the gate is "zero unresolved Codex threads", not an in-thread re-review.
-Q='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){mergeable mergeStateStatus headRefOid comments(last:50){nodes{author{login} body createdAt}} reviews(last:30){nodes{author{login} state submittedAt commit{oid}}} reviewThreads(first:100){nodes{id isResolved isOutdated finding:comments(first:1){nodes{author{login} body path}} recent:comments(last:20){totalCount nodes{author{login} body}}}}}}}'
+Q='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){mergeable mergeStateStatus headRefOid comments(last:50){nodes{author{login} body createdAt}} reviews(last:30){nodes{author{login} body state submittedAt commit{oid}}} reviewThreads(first:100){nodes{id isResolved isOutdated finding:comments(first:1){nodes{author{login} body path}} recent:comments(last:20){totalCount nodes{author{login} body}}}}}}}'
 
 case "$cmd" in
   status)
@@ -83,6 +83,14 @@ CODEX_LOGINS=("chatgpt-codex-connector","chatgpt-codex-connector[bot]")
 revs=(d.get("reviews") or {}).get("nodes") or []
 review_on_head=any((r.get("author") or {}).get("login") in CODEX_LOGINS
     and ((r.get("commit") or {}).get("oid"))==head for r in revs)
+# VOI-246: a head-pinned codex Review whose body carries the 👍 / :+1: payload
+# is the canonical no-issues verdict. A head-pinned review WITHOUT that signal
+# carries findings; resolving its threads on a rationale basis does NOT make
+# it equivalent to a fresh no-issues verdict. The merge gate must distinguish.
+review_on_head_clean=any((r.get("author") or {}).get("login") in CODEX_LOGINS
+    and ((r.get("commit") or {}).get("oid"))==head
+    and (":+1:" in (r.get("body") or "") or "👍" in (r.get("body") or ""))
+    for r in revs)
 # Codex signals CLEAN as a top-level COMMENT — a line like "did not find any
 # major issues" (also the "didnt" contraction). It is NOT commit-pinned (reviews
 # cannot distinguish clean vs findings), so it carries no headRefOid. Anchor its
@@ -92,7 +100,7 @@ review_on_head=any((r.get("author") or {}).get("login") in CODEX_LOGINS
 # review with a bare `@codex review` AFTER pushing a head, so a Codex clean
 # verdict post-dating the latest request necessarily pertains to the pushed head.
 # Fail-safe: if no review-request comment exists, do NOT accept a bare clean
-# comment — require the SHA-pinned review_on_head instead.
+# comment — require the SHA-pinned review_on_head_clean instead.
 coms=(d.get("comments") or {}).get("nodes") or []
 rr=[(c.get("createdAt") or "") for c in coms
     if "@codex review" in (c.get("body") or "").lower()
@@ -102,18 +110,22 @@ clean_comment=bool(rr_anchor) and any(
     (c.get("author") or {}).get("login") in CODEX_LOGINS
     and re.search(r"(did not|didn.?t) find any major issues", c.get("body") or "", re.I)
     and (c.get("createdAt") or "")>rr_anchor for c in coms)
-# SAFE AUTO-CLEAN = a head-PINNED Codex review only (review_on_head:
-# commit.oid==headRefOid, un-spoofable). A clean Codex verdict arrives as a
-# top-level COMMENT with NO SHA, NO head-pinned review, and pushedDate is
-# typically null on private repos — so a clean comment CANNOT be safely tied
-# to a head. It is therefore advisory only and NEVER auto-CLEAN: a merge gate
-# must stay safe even when a head is pushed without re-requesting review.
+# SAFE AUTO-CLEAN = a head-PINNED Codex review with the 👍/:+1: no-issues
+# signal (review_on_head_clean: commit.oid==headRefOid AND body carries the
+# canonical no-issues payload, un-spoofable). A clean Codex VERDICT (review
+# shape) with 👍 is the only auto-CLEAN gate. A head-pinned review WITHOUT
+# 👍 carries findings; resolving its threads on rationale alone does NOT
+# convert it to clean — the impl must re-trigger @codex review and wait for
+# a fresh head-pinned 👍 verdict. A clean COMMENT (no SHA, no head-pinned
+# review) is advisory only and NEVER auto-CLEAN.
 # 0 threads alone is never clean (never-reviewed PR has 0) — false-CLEAN guard.
-clean = mss=="CLEAN" and len(openn)==0 and review_on_head
+clean = mss=="CLEAN" and len(openn)==0 and review_on_head_clean
 if clean:
-    print("\nGATE: CLEAN (head-pinned Codex review on %s, 0 unresolved; mergeable once CI green)" % (head or "?")[:9])
-elif review_on_head:
+    print("\nGATE: CLEAN (head-pinned no-issues Codex review on %s, 0 unresolved; mergeable once CI green)" % (head or "?")[:9])
+elif review_on_head and len(openn)>0:
     print("\nGATE: BLOCKED (mss=%s, %d unresolved threads)" % (mss, len(openn)))
+elif review_on_head and len(openn)==0 and not review_on_head_clean and not clean_comment:
+    print("\nGATE: BLOCKED (head-pinned Codex review on %s carries findings; threads resolved on rationale alone but no fresh head-pinned 👍 verdict AND no clean comment post-dating the latest @codex review request. Re-trigger `@codex review` and wait for either a head-pinned 👍 review OR a clean comment that post-dates the latest review request.)" % (head or "?")[:9])
 elif clean_comment and len(openn)==0 and mss=="CLEAN":
     print("\nGATE: CLEAN-COMMENT-MANUAL (NOT a verdict) — Codex posted a comment-only clean note, but GitHub exposes no signal tying it to head %s (no SHA in body, no head-pinned review, pushedDate null) and a stale in-flight review request can make the timestamps look plausible. This gate CANNOT validate it. Safe resolutions: (a) re-run `@codex review` for the current head and wait for a head-pinned review, or (b) the operator independently confirms, from this session, that this clean note answered an `@codex review` issued AFTER this exact head was pushed. Never auto-merge on this." % (head or "?")[:9])
 else:
@@ -179,7 +191,7 @@ for t in th:
     ACK_WAIT="${3:-120}"
     VERDICT_MAX="${4:-1800}"
     INT=30
-    WQ='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){mergeStateStatus headRefOid reviews(last:30){nodes{author{login} commit{oid}}} comments(last:50){nodes{author{login} body createdAt reactions(first:20){nodes{content user{login}}}}} reviewThreads(first:100){nodes{isResolved}}}}}'
+    WQ='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){mergeStateStatus headRefOid reviews(last:30){nodes{author{login} body commit{oid}}} comments(last:50){nodes{author{login} body createdAt reactions(first:20){nodes{content user{login}}}}} reviewThreads(first:100){nodes{isResolved}}}}}'
     # Capture BOTH the Codex-comment count AND the latest Codex-comment
     # timestamp at invocation. The timestamp is the load-bearing baseline:
     # a fresh clean comment must post-date it (server-side createdAt, no
@@ -251,6 +263,14 @@ head=d.get("headRefOid")
 revs=(d.get("reviews") or {}).get("nodes") or []
 review_on_head=any((r.get("author") or {}).get("login") in CODEX_LOGINS
             and ((r.get("commit") or {}).get("oid"))==head for r in revs)
+# VOI-246: REVIEWED-CLEAN requires the head-pinned codex Review body to carry
+# the 👍 / :+1: no-issues signal. A head-pinned review with findings (no 👍)
+# is NOT a clean verdict even when threads are later resolved on a rationale
+# basis. The wait helper must surface that distinction.
+review_on_head_clean=any((r.get("author") or {}).get("login") in CODEX_LOGINS
+            and ((r.get("commit") or {}).get("oid"))==head
+            and (":+1:" in (r.get("body") or "") or "👍" in (r.get("body") or ""))
+            for r in revs)
 coms=(d.get("comments") or {}).get("nodes") or []
 codex_coms=[c for c in coms if (c.get("author") or {}).get("login") in CODEX_LOGINS]
 base=int(os.environ.get("BASE","0")); fresh=len(codex_coms)-base
@@ -280,8 +300,15 @@ clean_comment_baseline=bool(base_ts) and any(
 if openn>0:
     print("EXIT|FINDINGS open=%d mss=%s ci=%s" % (openn,mss,ci))
     sys.exit()
-if review_on_head and fresh>0 and ci!="pending":
-    print("EXIT|REVIEWED-CLEAN review_on_head=1 fresh=%d open=0 mss=%s ci=%s" % (fresh,mss,ci))
+if review_on_head_clean and ci!="pending":
+    # review_on_head_clean is already a fresh-on-head signal: a new head push
+    # invalidates prior reviews (their commit.oid no longer matches headRefOid).
+    # So gating REVIEWED-CLEAN on `fresh>0` (comment-count growth since
+    # baseline) drops valid head-pinned 👍 verdicts that arrived as a Review
+    # without an additional top-level comment. Drop the fresh>0 requirement
+    # for the head-pinned-clean path; keep it for the clean_comment paths
+    # below where freshness is the load-bearing anchor.
+    print("EXIT|REVIEWED-CLEAN review_on_head_clean=1 fresh=%d open=0 mss=%s ci=%s" % (fresh,mss,ci))
     sys.exit()
 if (clean_comment or clean_comment_baseline) and ci!="pending":
     print("EXIT|CLEAN-COMMENT-MANUAL clean_comment=1 open=0 mss=%s ci=%s — comment-only clean note, NOT a head-pinned verdict (no SHA in body, no head-pinned review). Director must manually confirm this answered an @codex review issued AFTER the current head was pushed." % (mss,ci))
