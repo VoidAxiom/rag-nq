@@ -421,9 +421,12 @@ function readAskSearchState(
         : components.rerankers[0]?.name ?? 'off',
     generator:
       generatorParam !== null &&
-      components.generators.some((choice) => choice.name === generatorParam)
+      components.generators.some(
+        (choice) => choice.name === generatorParam && choice.enabled !== false,
+      )
         ? generatorParam
-        : components.generators[0]?.name ?? 'heuristic',
+        : components.generators.find((choice) => choice.enabled !== false)?.name ??
+          'heuristic',
     collection:
       collectionParam !== null &&
       components.collections.some((choice) => choice.collection === collectionParam)

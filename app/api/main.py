@@ -438,10 +438,11 @@ def _per_query_metrics(
 
 
 def _components_used(settings: Settings, request: QueryApiRequest) -> ComponentSet:
+    rerank_applies = request.mode == "hybrid" and settings.rerank_enabled
     return ComponentSet(
         mode=request.mode,
         top_k=request.top_k,
-        reranker=settings.rerank_model_name if settings.rerank_enabled else "off",
+        reranker=settings.rerank_model_name if rerank_applies else "off",
         generator=settings.generation_provider,
         embedder=settings.embedder_name,
         collection=settings.qdrant_collection,

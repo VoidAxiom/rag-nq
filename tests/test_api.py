@@ -420,6 +420,78 @@ def test_query_rerank_enabled_false_wins_over_rerank_model_name(tmp_path: Path) 
     assert response.json()["components_used"]["reranker"] == "off"
 
 
+def test_query_components_used_reports_reranker_off_for_dense_mode(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "dense",
+            "generate": False,
+            "overrides": {
+                "rerank_enabled": True,
+                "rerank_model_name": "BAAI/bge-reranker-v2-m3",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["components_used"]["reranker"] == "off"
+
+
+def test_query_components_used_reports_reranker_off_for_sparse_mode(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "sparse",
+            "generate": False,
+            "overrides": {
+                "rerank_enabled": True,
+                "rerank_model_name": "BAAI/bge-reranker-v2-m3",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["components_used"]["reranker"] == "off"
+
+
+def test_query_components_used_reports_reranker_for_hybrid_mode(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {
+                "rerank_enabled": True,
+                "rerank_model_name": "BAAI/bge-reranker-v2-m3",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["components_used"]["reranker"]
+        == "BAAI/bge-reranker-v2-m3"
+    )
+
+
 def test_query_endpoint_accepts_rerank_model_name_override(tmp_path: Path) -> None:
     client = _client(tmp_path)
 

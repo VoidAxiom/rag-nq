@@ -185,6 +185,55 @@ describe('AskPage', () => {
     )
   })
 
+  it('falls back to heuristic when URL ?generator=openai but openai is disabled', async () => {
+    const fetchMock = stubAskFetch({
+      components: componentsFixture({
+        generators: [
+          { name: 'heuristic', label: 'Heuristic', enabled: true },
+          {
+            name: 'openai',
+            label: 'OpenAI gpt-4o',
+            enabled: false,
+            disabled_reason: 'OpenAI is not enabled.',
+          },
+        ],
+        openai_enabled: false,
+      }),
+    })
+
+    renderAskPage(['/ask?generator=openai&q_id=nq-1'])
+
+    expect(
+      await screen.findByRole('combobox', { name: /generator/i }),
+    ).toHaveTextContent('Heuristic')
+    await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/)
+
+    const askButton = screen.getByRole('button', { name: 'Ask' })
+    expect(askButton).toBeEnabled()
+    fireEvent.click(askButton)
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    const queryCall = fetchMock.mock.calls.find(
+      ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+    )
+    if (queryCall === undefined) {
+      throw new Error('Expected /query request body')
+    }
+    const [, init] = queryCall
+    const body = parseBody(init)
+    const overrides = body.overrides
+    if (!isRecord(overrides)) {
+      throw new Error('Expected overrides object')
+    }
+    expect(overrides.generation_provider).toBe('heuristic')
+  })
+
   it('URL params reflect knob selections', async () => {
     stubAskFetch()
 
