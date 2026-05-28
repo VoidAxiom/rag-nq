@@ -81,6 +81,36 @@ describe('AskPage', () => {
     ).toBeInTheDocument()
   })
 
+  it('buildOverrides sends generation_provider even when heuristic is selected', async () => {
+    const fetchMock = stubAskFetch()
+
+    renderAskPage(['/ask?q_id=nq-1'])
+
+    await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    const queryCall = fetchMock.mock.calls.find(
+      ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+    )
+    if (queryCall === undefined) {
+      throw new Error('Expected /query request body')
+    }
+    const [, init] = queryCall
+    const body = parseBody(init)
+    const overrides = body.overrides
+    if (!isRecord(overrides)) {
+      throw new Error('Expected overrides object')
+    }
+    expect(overrides.generation_provider).toBe('heuristic')
+  })
+
   it('renders per-query metrics when gold_answers are present in the request', async () => {
     stubAskFetch({
       queryResponder: (request) => {

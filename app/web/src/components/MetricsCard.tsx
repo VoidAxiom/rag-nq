@@ -40,8 +40,8 @@ export function MetricsCard({ metrics, components, latency }: MetricsCardProps) 
       </CardHeader>
       <CardContent className="grid gap-5">
         <div className="grid gap-3 sm:grid-cols-3">
-          <MetricValue label="EM" value={formatMetric(metrics.em)} />
-          <MetricValue label="F1" value={formatMetric(metrics.f1)} />
+          <MetricValue label="EM" value={formatOptionalMetric(metrics.em)} />
+          <MetricValue label="F1" value={formatOptionalMetric(metrics.f1)} />
           <MetricValue
             label="supporting_fact_recall_at_k"
             value={formatMetric(metrics.supporting_fact_recall_at_k)}
@@ -83,6 +83,11 @@ function MetricValue({ label, value }: { label: string; value: string }) {
 
 function formatMetric(value: number | null): string {
   return value === null ? '—' : value.toFixed(3)
+}
+
+// "n/a" when the eval input did not supply gold_answers (recall-only query).
+function formatOptionalMetric(value: number | null): string {
+  return value === null ? 'n/a' : formatMetric(value)
 }
 
 function formatOptionalMs(value: number | undefined): string {

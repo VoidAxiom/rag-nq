@@ -359,6 +359,28 @@ def test_query_endpoint_computes_supporting_fact_recall_at_k(tmp_path: Path) -> 
     assert metrics["k_used"] == 1
 
 
+def test_query_supporting_recall_uses_request_top_k_not_returned_count(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 10,
+            "mode": "sparse",
+            "generate": False,
+            "supporting_passage_ids": ["sparse-1", "sparse-2"],
+        },
+    )
+
+    assert response.status_code == 200
+    metrics = response.json()["metrics"]
+    assert metrics["supporting_fact_recall_at_k"] == 0.5
+    assert metrics["k_used"] == 10
+
+
 def test_query_endpoint_accepts_rerank_enabled_override(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -370,6 +392,27 @@ def test_query_endpoint_accepts_rerank_enabled_override(tmp_path: Path) -> None:
             "mode": "hybrid",
             "generate": False,
             "overrides": {"rerank_enabled": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["components_used"]["reranker"] == "off"
+
+
+def test_query_rerank_enabled_false_wins_over_rerank_model_name(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {
+                "rerank_enabled": False,
+                "rerank_model_name": "BAAI/bge-reranker-v2-m3",
+            },
         },
     )
 

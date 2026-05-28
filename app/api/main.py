@@ -379,8 +379,9 @@ def _build_effective_settings(app_settings: Settings, request: QueryApiRequest) 
         if rerank_model_name == "off":
             update_dict["rerank_enabled"] = False
         else:
-            update_dict["rerank_enabled"] = True
             update_dict["rerank_model_name"] = rerank_model_name
+            if "rerank_enabled" not in overrides:
+                update_dict["rerank_enabled"] = True
     if "generation_provider" in overrides:
         update_dict["generation_provider"] = overrides["generation_provider"]
     if "generation_model_name" in overrides:
@@ -416,7 +417,7 @@ def _per_query_metrics(
         metrics.f1 = compute_f1(grounded.answer, request.gold_answers)
     if request.supporting_passage_ids is not None:
         retrieved_point_ids = [hit.point_id for hit in hits]
-        k_used = len(retrieved_point_ids)
+        k_used = request.top_k
         metrics.supporting_fact_recall_at_k = compute_supporting_fact_recall_at_k(
             retrieved_point_ids,
             request.supporting_passage_ids,

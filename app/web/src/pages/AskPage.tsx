@@ -483,9 +483,7 @@ function buildOverrides(reranker: string, generator: string): Record<string, unk
       ? { rerank_enabled: false }
       : { rerank_enabled: true, rerank_model_name: reranker }
 
-  if (generator !== 'heuristic') {
-    overrides.generation_provider = generator
-  }
+  overrides.generation_provider = generator
 
   return overrides
 }
