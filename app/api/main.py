@@ -7,16 +7,23 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
+from pydantic import TypeAdapter, ValidationError
 from starlette.staticfiles import StaticFiles
 
 from app.api.schemas import (
     ArtifactStatus,
+    CollectionChoice,
+    ComponentChoice,
+    ComponentsResponse,
+    EvalQuestion,
+    EvalQuestionsResponse,
     GenerationConfigMetadata,
+    GeneratorChoice,
     HealthResponse,
     QueryApiRequest,
     RetrievalConfigMetadata,
@@ -25,11 +32,19 @@ from app.api.schemas import (
     RuntimeConfigResponse,
 )
 from src.config.settings import Settings
+from src.evaluation.per_query_metrics import (
+    compute_em,
+    compute_f1,
+    compute_supporting_fact_recall_at_k,
+)
 from src.evaluation.scoreboard import SCOREBOARD_PATH, Scoreboard, load_scoreboard
 from src.generation.grounded import GroundedGenerator
 from src.models.query_schemas import (
+    ComponentSet,
     GroundedAnswer,
+    LatencyBreakdown,
     PassageHit,
+    PerQueryMetrics,
     QueryResponse,
     RetrievalMetrics,
 )
@@ -37,6 +52,22 @@ from src.observability.logging_setup import setup_logging
 from src.retrieval.qdrant_retrievers import Mode, QdrantModeRetriever
 
 LOGGER = logging.getLogger(__name__)
+VALID_EVAL_BENCHMARKS = {"nq", "hotpotqa", "2wikimhqa", "musique"}
+TIER_1_OVERRIDE_KEYS = {
+    "rerank_enabled",
+    "rerank_model_name",
+    "generation_provider",
+    "generation_model_name",
+}
+OPENAI_OVERRIDE_ERROR = (
+    "OpenAI generator requires both RAG_OPENAI_API_KEY and RAG_OPENAI_OPT_IN=1 to be set."
+)
+# mirrors src/ingestion/hotpotqa_loader.py::_COLLECTION_NAME — keep in sync
+HOTPOTQA_COLLECTION = "hotpotqa_passages_qwen3_embed_4b"
+# mirrors src/ingestion/twowikimhqa_loader.py::_COLLECTION_NAME — keep in sync
+TWOWIKIMHQA_COLLECTION = "2wikimhqa_passages_qwen3_embed_4b"
+# mirrors src/ingestion/musique_loader.py::_COLLECTION_NAME — keep in sync
+MUSIQUE_COLLECTION = "musique_passages_qwen3_embed_4b"
 
 
 class ApiRetriever(Protocol):
@@ -127,21 +158,111 @@ def create_app(
 
     @app.post("/query", response_model=QueryResponse)
     def query(request: QueryApiRequest) -> QueryResponse:
-        retrieval_response = retrieve(
-            RetrieveRequest(query=request.query, top_k=request.top_k, mode=request.mode)
-        )
-        if not request.generate:
-            return retrieval_response
+        effective_settings = _build_effective_settings(app_settings, request)
+        retrieval_started_at = time.monotonic()
         try:
-            generator = make_generator(app_settings)
-            grounded = generator.generate(
-                request.query,
-                retrieval_response.retrieved_passages or [],
-            )
+            retriever = make_retriever(effective_settings, request.mode)
+            hits = retriever.retrieve(request.query, top_k=request.top_k)
         except Exception as exc:
-            LOGGER.exception("grounded generation failed")
+            LOGGER.exception("retrieval failed mode=%s", request.mode)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return retrieval_response.model_copy(update={"grounded": grounded})
+        retrieval_wall_ms = (time.monotonic() - retrieval_started_at) * 1000.0
+        retrieval_metrics = retriever.last_retrieval_metrics or RetrievalMetrics()
+        retrieval_ms, rerank_ms = _retrieval_latency_ms(retrieval_metrics, retrieval_wall_ms)
+
+        grounded: GroundedAnswer | None = None
+        generation_ms = 0.0
+        if request.generate:
+            generation_started_at = time.monotonic()
+            try:
+                generator = make_generator(effective_settings)
+                grounded = generator.generate(request.query, hits)
+            except Exception as exc:
+                LOGGER.exception("grounded generation failed")
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            generation_ms = (time.monotonic() - generation_started_at) * 1000.0
+
+        latency = LatencyBreakdown(
+            retrieval_ms=retrieval_ms,
+            rerank_ms=rerank_ms,
+            generation_ms=generation_ms,
+            total_ms=retrieval_ms + rerank_ms + generation_ms,
+        )
+        return QueryResponse(
+            query=request.query,
+            retrieved_passages=hits,
+            retrieval_metrics=retrieval_metrics,
+            grounded=grounded,
+            metrics=_per_query_metrics(request, grounded, hits),
+            components_used=_components_used(effective_settings, request),
+            latency_ms=latency,
+            query_id=request.query_id,
+        )
+
+    @app.get("/api/eval_questions/{benchmark}", response_model=EvalQuestionsResponse)
+    def eval_questions(benchmark: str) -> EvalQuestionsResponse:
+        if benchmark not in VALID_EVAL_BENCHMARKS:
+            raise HTTPException(status_code=404, detail=f"Unknown benchmark {benchmark!r}.")
+        path = app_settings.output_dir / "eval_questions" / f"{benchmark}.json"
+        if not path.is_file():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Eval questions file not found at {path}. "
+                    "P1-F curation step not run yet."
+                ),
+            )
+        try:
+            questions = TypeAdapter(list[EvalQuestion]).validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except ValidationError as exc:
+            LOGGER.exception("eval questions file is invalid path=%s", path)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Eval questions file at {path} is invalid: {exc}",
+            ) from exc
+        return EvalQuestionsResponse(benchmark=benchmark, questions=questions)
+
+    @app.get("/api/components", response_model=ComponentsResponse)
+    def components() -> ComponentsResponse:
+        openai_enabled, disabled_reason = _openai_availability()
+        return ComponentsResponse(
+            modes=["dense", "sparse", "hybrid"],
+            top_k_choices=[5, 10, 20, 50],
+            rerankers=[
+                ComponentChoice(
+                    name="BAAI/bge-reranker-v2-m3",
+                    label="BGE-v2-m3 (default)",
+                ),
+                ComponentChoice(
+                    name="cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    label="MiniLM-L-6-v2 (fast)",
+                ),
+                ComponentChoice(name="off", label="No rerank"),
+            ],
+            generators=[
+                GeneratorChoice(
+                    name="heuristic",
+                    label="Heuristic (local, default)",
+                    enabled=True,
+                ),
+                GeneratorChoice(
+                    name="openai",
+                    label="OpenAI GPT-4o (locked unless env opt-in)",
+                    enabled=openai_enabled,
+                    disabled_reason=None if openai_enabled else disabled_reason,
+                ),
+            ],
+            collections=[
+                CollectionChoice(benchmark="nq", collection=app_settings.qdrant_collection),
+                CollectionChoice(benchmark="hotpotqa", collection=HOTPOTQA_COLLECTION),
+                CollectionChoice(benchmark="2wikimhqa", collection=TWOWIKIMHQA_COLLECTION),
+                CollectionChoice(benchmark="musique", collection=MUSIQUE_COLLECTION),
+            ],
+            openai_enabled=openai_enabled,
+            embedder=app_settings.embedder_name,
+        )
 
     @app.get("/api/scoreboard", response_model=Scoreboard)
     def scoreboard() -> Scoreboard:
@@ -233,6 +354,98 @@ def safe_runtime_config(settings: Settings) -> RuntimeConfigResponse:
 
 def _artifact_status(path: Path) -> ArtifactStatus:
     return ArtifactStatus(path=str(path), exists=path.is_file())
+
+
+def _build_effective_settings(app_settings: Settings, request: QueryApiRequest) -> Settings:
+    update_dict: dict[str, Any] = {}
+    if request.collection is not None:
+        update_dict["qdrant_collection"] = request.collection
+
+    overrides = request.overrides or {}
+    invalid_keys = sorted(set(overrides) - TIER_1_OVERRIDE_KEYS)
+    if invalid_keys:
+        rejected = ", ".join(invalid_keys)
+        raise HTTPException(status_code=422, detail=f"Unsupported override key(s): {rejected}")
+
+    if overrides.get("generation_provider") == "openai":
+        openai_enabled, _disabled_reason = _openai_availability()
+        if not openai_enabled:
+            raise HTTPException(status_code=422, detail=OPENAI_OVERRIDE_ERROR)
+
+    if "rerank_enabled" in overrides:
+        update_dict["rerank_enabled"] = overrides["rerank_enabled"]
+    if "rerank_model_name" in overrides:
+        rerank_model_name = str(overrides["rerank_model_name"])
+        if rerank_model_name == "off":
+            update_dict["rerank_enabled"] = False
+        else:
+            update_dict["rerank_enabled"] = True
+            update_dict["rerank_model_name"] = rerank_model_name
+    if "generation_provider" in overrides:
+        update_dict["generation_provider"] = overrides["generation_provider"]
+    if "generation_model_name" in overrides:
+        update_dict["generation_model_name"] = overrides["generation_model_name"]
+
+    return app_settings.model_copy(update=update_dict)
+
+
+def _retrieval_latency_ms(metrics: RetrievalMetrics, fallback_ms: float) -> tuple[float, float]:
+    timings = metrics.timings
+    if timings is None:
+        return fallback_ms, 0.0
+    rerank_ms = timings.rerank_seconds * 1000.0
+    retrieval_ms = (
+        timings.retrieve_seconds + timings.fusion_seconds + timings.dedupe_seconds
+    ) * 1000.0
+    if retrieval_ms == 0.0 and timings.total_seconds > 0.0:
+        retrieval_ms = max((timings.total_seconds * 1000.0) - rerank_ms, 0.0)
+    return retrieval_ms, rerank_ms
+
+
+def _per_query_metrics(
+    request: QueryApiRequest,
+    grounded: GroundedAnswer | None,
+    hits: list[PassageHit],
+) -> PerQueryMetrics | None:
+    if request.gold_answers is None and request.supporting_passage_ids is None:
+        return None
+
+    metrics = PerQueryMetrics()
+    if request.gold_answers is not None and grounded is not None and not grounded.abstained:
+        metrics.em = compute_em(grounded.answer, request.gold_answers)
+        metrics.f1 = compute_f1(grounded.answer, request.gold_answers)
+    if request.supporting_passage_ids is not None:
+        retrieved_point_ids = [hit.point_id for hit in hits]
+        k_used = len(retrieved_point_ids)
+        metrics.supporting_fact_recall_at_k = compute_supporting_fact_recall_at_k(
+            retrieved_point_ids,
+            request.supporting_passage_ids,
+            k_used,
+        )
+        metrics.k_used = k_used
+    return metrics
+
+
+def _components_used(settings: Settings, request: QueryApiRequest) -> ComponentSet:
+    return ComponentSet(
+        mode=request.mode,
+        top_k=request.top_k,
+        reranker=settings.rerank_model_name if settings.rerank_enabled else "off",
+        generator=settings.generation_provider,
+        embedder=settings.embedder_name,
+        collection=settings.qdrant_collection,
+    )
+
+
+def _openai_availability() -> tuple[bool, str | None]:
+    missing: list[str] = []
+    if not os.environ.get("RAG_OPENAI_API_KEY"):
+        missing.append("RAG_OPENAI_API_KEY")
+    if os.environ.get("RAG_OPENAI_OPT_IN") != "1":
+        missing.append("RAG_OPENAI_OPT_IN=1")
+    if missing:
+        return False, f"Missing {' and '.join(missing)}."
+    return True, None
 
 
 def _safe_url(value: str) -> str:
