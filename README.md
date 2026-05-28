@@ -56,13 +56,13 @@ uv run uvicorn app.api.main:app --reload
 Open:
 
 - API docs: `http://127.0.0.1:8000/docs`
-- Health: `http://127.0.0.1:8000/health`
-- Config: `http://127.0.0.1:8000/config`
+- Health: `http://127.0.0.1:8000/api/health`
+- Config: `http://127.0.0.1:8000/api/config`
 
 Example retrieval request:
 
 ```bash
-curl -s http://127.0.0.1:8000/retrieve \
+curl -s http://127.0.0.1:8000/api/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query":"What is the capital of France?","mode":"hybrid","top_k":5}' \
   | python -m json.tool
@@ -71,7 +71,7 @@ curl -s http://127.0.0.1:8000/retrieve \
 Example query request:
 
 ```bash
-curl -s http://127.0.0.1:8000/query \
+curl -s http://127.0.0.1:8000/api/query \
   -H "Content-Type: application/json" \
   -d '{"query":"What is the capital of France?","mode":"hybrid","top_k":5,"generate":true}' \
   | python -m json.tool
@@ -101,9 +101,10 @@ RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn app.api.main:app
 ```
 
 Then open `http://127.0.0.1:8000`. FastAPI serves the SPA at `/` (with
-SPA fallback for arbitrary React Router routes) alongside the existing
-JSON endpoints — `/health`, `/config`, `/retrieve`, `/query` at root
-plus `/api/scoreboard` under `/api`. The `(cd app/web && ...)` subshell
+SPA fallback for arbitrary React Router routes) alongside the JSON
+endpoints under `/api/*` — `/api/health`, `/api/config`, `/api/retrieve`,
+`/api/query`, `/api/scoreboard`, `/api/components`, and
+`/api/eval_questions/{benchmark}`. The `(cd app/web && ...)` subshell
 keeps the outer shell at the repo root so `uvicorn`'s Python import path
 resolves `app.api.main` correctly and the `RAG_WEB_DIST_PATH` relative
 path resolves to `<repo>/app/web/dist`.
