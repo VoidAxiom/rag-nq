@@ -29,8 +29,8 @@ class MultihopLoader(Protocol):
         """Return the expected Qdrant collection name."""
 
     @property
-    def expected_eval_count(self) -> int:
-        """Return the dev-split row count (sanity-check anchor for P1-B/C/D)."""
+    def expected_passage_count(self) -> int:
+        """APPROXIMATE published passage count for the benchmark's corpus (per docs/PLAN.md §3). Used by P1-B/C/D ingest scripts as a downstream sanity-check sentinel (assert 0.5 * expected <= actual <= 2 * expected after ingest completes). NOT a question count."""  # noqa: E501
 
     def iter_passages(self) -> Iterator[Passage]:
         """Iterate normalized benchmark passages."""
@@ -41,7 +41,7 @@ class _HotpotqaStubLoader:
 
     _DATASET_NAME = "hotpotqa"
     _COLLECTION_NAME = "hotpotqa_passages_qwen3_embed_4b"
-    _EVAL_COUNT = 7405
+    _PASSAGE_COUNT = 500_000
     _PENDING_TOKEN = "VOI-PENDING-P1-B"
 
     @property
@@ -57,10 +57,10 @@ class _HotpotqaStubLoader:
         return self._COLLECTION_NAME
 
     @property
-    def expected_eval_count(self) -> int:
-        """Return the dev-split row count (sanity-check anchor for P1-B/C/D)."""
+    def expected_passage_count(self) -> int:
+        """Return the approximate passage-count sentinel for downstream sanity checks."""
 
-        return self._EVAL_COUNT
+        return self._PASSAGE_COUNT
 
     def iter_passages(self) -> Iterator[Passage]:
         """Iterate normalized benchmark passages."""
@@ -74,7 +74,7 @@ class _TwoWikiMhqaStubLoader:
 
     _DATASET_NAME = "2wikimhqa"
     _COLLECTION_NAME = "2wikimhqa_passages_qwen3_embed_4b"
-    _EVAL_COUNT = 12576
+    _PASSAGE_COUNT = 430_000
     _PENDING_TOKEN = "VOI-PENDING-P1-C"
 
     @property
@@ -90,10 +90,10 @@ class _TwoWikiMhqaStubLoader:
         return self._COLLECTION_NAME
 
     @property
-    def expected_eval_count(self) -> int:
-        """Return the dev-split row count (sanity-check anchor for P1-B/C/D)."""
+    def expected_passage_count(self) -> int:
+        """Return the approximate passage-count sentinel for downstream sanity checks."""
 
-        return self._EVAL_COUNT
+        return self._PASSAGE_COUNT
 
     def iter_passages(self) -> Iterator[Passage]:
         """Iterate normalized benchmark passages."""
@@ -107,7 +107,7 @@ class _MuSiQueStubLoader:
 
     _DATASET_NAME = "musique"
     _COLLECTION_NAME = "musique_passages_qwen3_embed_4b"
-    _EVAL_COUNT = 2417
+    _PASSAGE_COUNT = 100_000
     _PENDING_TOKEN = "VOI-PENDING-P1-D"
 
     @property
@@ -123,10 +123,10 @@ class _MuSiQueStubLoader:
         return self._COLLECTION_NAME
 
     @property
-    def expected_eval_count(self) -> int:
-        """Return the dev-split row count (sanity-check anchor for P1-B/C/D)."""
+    def expected_passage_count(self) -> int:
+        """Return the approximate passage-count sentinel for downstream sanity checks."""
 
-        return self._EVAL_COUNT
+        return self._PASSAGE_COUNT
 
     def iter_passages(self) -> Iterator[Passage]:
         """Iterate normalized benchmark passages."""

@@ -28,19 +28,19 @@ def test_multihop_benchmark_enum_has_three_values() -> None:
             MultihopBenchmark.HOTPOTQA,
             "hotpotqa",
             "hotpotqa_passages_qwen3_embed_4b",
-            7405,
+            500_000,
         ),
         (
             MultihopBenchmark.TWOWIKIMHQA,
             "2wikimhqa",
             "2wikimhqa_passages_qwen3_embed_4b",
-            12576,
+            430_000,
         ),
         (
             MultihopBenchmark.MUSIQUE,
             "musique",
             "musique_passages_qwen3_embed_4b",
-            2417,
+            100_000,
         ),
     ],
 )
@@ -54,7 +54,7 @@ def test_load_multihop_dispatches_to_per_benchmark_stub(
 
     assert loader.dataset_name == expected_name
     assert loader.expected_collection_name == expected_collection
-    assert loader.expected_eval_count == expected_count
+    assert loader.expected_passage_count == expected_count
 
 
 @pytest.mark.parametrize(
@@ -81,7 +81,7 @@ def test_load_multihop_returns_loader_implementing_protocol() -> None:
 
     assert isinstance(loader.dataset_name, str) and loader.dataset_name
     assert isinstance(loader.expected_collection_name, str) and loader.expected_collection_name
-    assert isinstance(loader.expected_eval_count, int) and loader.expected_eval_count > 0
+    assert isinstance(loader.expected_passage_count, int) and loader.expected_passage_count > 0
     assert callable(loader.iter_passages)
 
 
