@@ -400,3 +400,71 @@ def test_unknown_dataset_arg_rejected_by_argparse(capsys: pytest.CaptureFixture[
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "invalid choice" in captured.err
+
+
+def test_sparse_artifact_names_are_per_benchmark_for_indexers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    passage_count = 4
+    _patch_loader(
+        monkeypatch,
+        passages=_make_passages(passage_count, prefix="sparse"),
+        expected_count=passage_count,
+    )
+    dense_settings: list[Settings] = []
+    sparse_settings: list[Settings] = []
+
+    class SpyDenseIndexer:
+        def __init__(self, settings: Settings) -> None:
+            dense_settings.append(settings)
+
+        def build_from_jsonl_streaming(
+            self,
+            jsonl_path: Path,
+            *,
+            lines_per_batch: int,
+            max_index_rows: int | None = None,
+            max_passages: int | None = None,
+        ) -> DenseBuildResult:
+            del lines_per_batch, max_index_rows, max_passages
+            vector_count = len(jsonl_path.read_text(encoding="utf-8").splitlines())
+            return DenseBuildResult(vector_count=vector_count, vector_size=4)
+
+    class SpySparseQdrantIndexer:
+        def __init__(self, settings: Settings) -> None:
+            sparse_settings.append(settings)
+
+        def build_from_jsonl(
+            self,
+            jsonl_path: Path,
+            *,
+            max_index_rows: int | None = None,
+            max_passages: int | None = None,
+        ) -> SparseQdrantBuildResult:
+            del max_index_rows, max_passages
+            document_count = len(jsonl_path.read_text(encoding="utf-8").splitlines())
+            return SparseQdrantBuildResult(
+                document_count=document_count,
+                vocabulary_size=7,
+                points_updated=document_count,
+            )
+
+    monkeypatch.setattr(ingest_multihop, "DenseIndexer", SpyDenseIndexer)
+    monkeypatch.setattr(ingest_multihop, "SparseQdrantIndexer", SpySparseQdrantIndexer)
+
+    ingest_multihop.main(["--dataset", "musique"])
+
+    assert len(dense_settings) == 1
+    assert len(sparse_settings) == 1
+    for settings in [dense_settings[0], sparse_settings[0]]:
+        assert settings.sparse_pass1_file == "sparse_pass1__musique.json"
+        assert settings.sparse_manifest_file == "sparse_index_manifest__musique.json"
+        assert settings.sparse_pass1_path == tmp_path / "sparse_pass1__musique.json"
+        assert (
+            settings.sparse_manifest_path
+            == tmp_path / "sparse_index_manifest__musique.json"
+        )
+        assert settings.sparse_pass1_file != "sparse_pass1.json"
+        assert settings.sparse_manifest_file != "sparse_index_manifest.json"

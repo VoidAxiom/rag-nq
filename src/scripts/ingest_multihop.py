@@ -111,7 +111,11 @@ def run_ingest_multihop(
 
     settings = Settings.from_env()
     per_benchmark_settings = settings.model_copy(
-        update={"qdrant_collection": loader.expected_collection_name}
+        update={
+            "qdrant_collection": loader.expected_collection_name,
+            "sparse_pass1_file": f"sparse_pass1__{benchmark.value}.json",
+            "sparse_manifest_file": f"sparse_index_manifest__{benchmark.value}.json",
+        }
     )
 
     jsonl_path = PassageStore.multihop_jsonl_path(benchmark, per_benchmark_settings.output_dir)
