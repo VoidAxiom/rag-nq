@@ -8,6 +8,7 @@ from typing import Protocol
 
 from src.ingestion.hotpotqa_loader import HotpotqaLoader
 from src.ingestion.models import Passage
+from src.ingestion.twowikimhqa_loader import TwoWikiMhqaLoader
 
 
 class MultihopBenchmark(Enum):
@@ -35,39 +36,6 @@ class MultihopLoader(Protocol):
 
     def iter_passages(self) -> Iterator[Passage]:
         """Iterate normalized benchmark passages."""
-
-
-class _TwoWikiMhqaStubLoader:
-    """Placeholder loader for 2WikiMultihopQA."""
-
-    _DATASET_NAME = "2wikimhqa"
-    _COLLECTION_NAME = "2wikimhqa_passages_qwen3_embed_4b"
-    _PASSAGE_COUNT = 430_000
-    _PENDING_TOKEN = "VOI-PENDING-P1-C"
-
-    @property
-    def dataset_name(self) -> str:
-        """Return the canonical benchmark dataset name."""
-
-        return self._DATASET_NAME
-
-    @property
-    def expected_collection_name(self) -> str:
-        """Return the expected Qdrant collection name."""
-
-        return self._COLLECTION_NAME
-
-    @property
-    def expected_passage_count(self) -> int:
-        """Return the approximate passage-count sentinel for downstream sanity checks."""
-
-        return self._PASSAGE_COUNT
-
-    def iter_passages(self) -> Iterator[Passage]:
-        """Iterate normalized benchmark passages."""
-
-        raise NotImplementedError(f"2WikiMHQA loader pending — see {self._PENDING_TOKEN}")
-        yield  # pragma: no cover
 
 
 class _MuSiQueStubLoader:
@@ -108,7 +76,7 @@ def load_multihop(name: MultihopBenchmark) -> MultihopLoader:
 
     loaders = {
         MultihopBenchmark.HOTPOTQA: HotpotqaLoader,
-        MultihopBenchmark.TWOWIKIMHQA: _TwoWikiMhqaStubLoader,
+        MultihopBenchmark.TWOWIKIMHQA: TwoWikiMhqaLoader,
         MultihopBenchmark.MUSIQUE: _MuSiQueStubLoader,
     }
     loader_cls = loaders.get(name)

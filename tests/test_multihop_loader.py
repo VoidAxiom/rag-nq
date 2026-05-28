@@ -60,7 +60,6 @@ def test_load_multihop_dispatches_to_per_benchmark_stub(
 @pytest.mark.parametrize(
     ("benchmark", "expected_token"),
     [
-        (MultihopBenchmark.TWOWIKIMHQA, "VOI-PENDING-P1-C"),
         (MultihopBenchmark.MUSIQUE, "VOI-PENDING-P1-D"),
     ],
 )
