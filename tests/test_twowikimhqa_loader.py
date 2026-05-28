@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Iterator, Mapping
 
 import pytest
@@ -36,6 +38,22 @@ SYNTHETIC_ROWS: list[dict[str, object]] = [
     },
 ]
 
+JSON_ENCODED_ROWS: list[dict[str, object]] = [
+    {
+        "_id": "json-alpha",
+        "context": [
+            ['"Tokyo"', '["s1", "s2"]'],
+            ['"Kyoto"', '["old capital", "temples"]'],
+        ],
+    },
+    {
+        "_id": "json-beta",
+        "context": [
+            ['"Osaka"', '["port", "food"]'],
+        ],
+    },
+]
+
 
 def _patch_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, object]]) -> None:
     def fake_iter_rows() -> Iterator[Mapping[str, object]]:
@@ -52,7 +70,11 @@ def _non_empty_paragraph_count(rows: list[dict[str, object]]) -> int:
         for paragraph in context:
             assert isinstance(paragraph, list)
             assert len(paragraph) == 2
-            sentences = paragraph[1]
+            raw_sentences = paragraph[1]
+            if isinstance(raw_sentences, str):
+                sentences: object = json.loads(raw_sentences)
+            else:
+                sentences = raw_sentences
             assert isinstance(sentences, list)
             sentence_values: list[str] = []
             for sentence in sentences:
@@ -115,6 +137,41 @@ def test_iter_passages_title_and_text_populated(monkeypatch: pytest.MonkeyPatch)
     assert first_passage.text == "Ada was a mathematician. She wrote notes about computing."
 
 
+def test_iter_passages_decodes_json_encoded_title_and_sentences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_rows(monkeypatch, JSON_ENCODED_ROWS)
+
+    passages = list(TwoWikiMhqaLoader().iter_passages())
+
+    assert len(passages) == _non_empty_paragraph_count(JSON_ENCODED_ROWS)
+    assert passages[0].title == "Tokyo"
+    assert passages[0].text == "s1 s2"
+    assert passages[0].source == passages[0].title
+    assert [passage.passage_id for passage in passages] == [
+        "2wikimhqa-json-alpha-0",
+        "2wikimhqa-json-alpha-1",
+        "2wikimhqa-json-beta-0",
+    ]
+
+
+def test_iter_passages_raises_on_malformed_sentences_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: list[dict[str, object]] = [
+        {
+            "_id": "bad-json",
+            "context": [
+                ['"Tokyo"', "not json"],
+            ],
+        },
+    ]
+    _patch_rows(monkeypatch, rows)
+
+    with pytest.raises(TypeError, match="is not valid JSON"):
+        list(TwoWikiMhqaLoader().iter_passages())
+
+
 def test_iter_passages_skips_empty_paragraphs(monkeypatch: pytest.MonkeyPatch) -> None:
     rows: list[dict[str, object]] = [
         {
@@ -143,3 +200,33 @@ def test_iter_passages_returns_passage_instances(monkeypatch: pytest.MonkeyPatch
     passages = list(TwoWikiMhqaLoader().iter_passages())
 
     assert all(isinstance(passage, Passage) for passage in passages)
+
+
+@pytest.mark.live_network
+def test_iter_passages_live_hf_first_row_smoke() -> None:
+    if os.getenv("RAG_RUN_LIVE_NETWORK_TESTS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        pytest.skip("Set RAG_RUN_LIVE_NETWORK_TESTS=1 to run live-network HF tests.")
+
+    pytest.importorskip("datasets")
+    try:
+        from datasets.exceptions import DatasetNotFoundError
+    except ImportError:
+        DatasetNotFoundError: type[BaseException] = OSError
+
+    loader = TwoWikiMhqaLoader()
+    assert loader.dataset_name == "2wikimhqa"
+
+    try:
+        first_passage = next(loader.iter_passages())
+    except (OSError, ConnectionError, DatasetNotFoundError) as exc:
+        pytest.skip(f"live HF unavailable: {exc}")
+
+    assert isinstance(first_passage, Passage)
+    assert first_passage.text
+    assert isinstance(first_passage.title, str)
+    assert not first_passage.title.startswith('"')
