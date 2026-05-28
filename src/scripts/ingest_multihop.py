@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,18 +30,39 @@ _DATASET_CHOICES: tuple[str, ...] = tuple(benchmark.value for benchmark in Multi
 class _CliArgs:
     dataset: str
     dry_run: bool
+    sample_size: int | None
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("--sample-size must be greater than zero.")
+    return parsed
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> _CliArgs:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, choices=_DATASET_CHOICES)
     parser.add_argument(
+        "--sample-size",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Cap ingestion to passages from first N source rows that emit passages "
+            "(deterministic passage-prefix)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Write artifacts and manifest without building dense or sparse indexes.",
     )
     namespace = parser.parse_args(argv)
-    return _CliArgs(dataset=namespace.dataset, dry_run=namespace.dry_run)
+    return _CliArgs(
+        dataset=namespace.dataset,
+        dry_run=namespace.dry_run,
+        sample_size=namespace.sample_size,
+    )
 
 
 def _multihop_point_id(passage_id: str) -> str:
@@ -85,6 +106,36 @@ def _write_index_chunks_jsonl(passages: Iterable[Passage], path: Path) -> int:
     return count
 
 
+def _cap_passages_by_row(passages: Iterator[Passage], max_rows: int) -> Iterator[Passage]:
+    """Yield every passage whose ``passage_id`` row-key falls within the prefix.
+
+    The prefix is the first ``max_rows`` distinct row-keys observed in the input
+    stream. Sampling happens at the passage-emission boundary (downstream of any
+    loader-side filtering of empty/whitespace paragraphs), not at the HF
+    source-row boundary. Deterministic: same loader output means same bytewise
+    emitted passages for a fixed ``max_rows``. Passage IDs must follow the
+    ``{prefix}-{row}-{para}`` multihop format so this wrapper can derive the
+    row-key safely. The underlying iterator is advanced at most one passage past
+    the cap (to discover the (N+1)th row-key); no subsequent passages are
+    consumed.
+    """
+
+    seen_row_keys: set[str] = set()
+    for passage in passages:
+        if passage.passage_id.count("-") < 2:
+            raise ValueError(
+                f"passage_id={passage.passage_id!r} does not match the "
+                "expected '{prefix}-{row}-{para}' multihop format; "
+                "_cap_passages_by_row cannot derive a row-key safely."
+            )
+        row_key = passage.passage_id.rsplit("-", 1)[0]
+        if row_key not in seen_row_keys:
+            if len(seen_row_keys) >= max_rows:
+                return
+            seen_row_keys.add(row_key)
+        yield passage
+
+
 def _passage_ratio(actual: int, expected: int) -> float:
     if expected <= 0:
         raise ValueError("expected_passage_count must be greater than zero.")
@@ -96,7 +147,10 @@ def _is_anomalous_ratio(ratio: float) -> bool:
 
 
 def run_ingest_multihop(
-    benchmark: MultihopBenchmark, *, dry_run: bool = False
+    benchmark: MultihopBenchmark,
+    *,
+    dry_run: bool = False,
+    sample_size: int | None = None,
 ) -> IndexBuildManifest:
     """Run the multihop artifact, dense, sparse, reconcile, and manifest pipeline."""
 
@@ -108,6 +162,8 @@ def run_ingest_multihop(
         loader.expected_passage_count,
         extra={"stage": "load_multihop"},
     )
+    if sample_size is not None:
+        LOGGER.info("sample_size=%s", sample_size, extra={"stage": "sample"})
 
     settings = Settings.from_env()
     per_benchmark_settings = settings.model_copy(
@@ -119,7 +175,11 @@ def run_ingest_multihop(
     )
 
     jsonl_path = PassageStore.multihop_jsonl_path(benchmark, per_benchmark_settings.output_dir)
-    passage_count = _write_index_chunks_jsonl(loader.iter_passages(), jsonl_path)
+    if sample_size is None:
+        passages_source = loader.iter_passages()
+    else:
+        passages_source = _cap_passages_by_row(loader.iter_passages(), sample_size)
+    passage_count = _write_index_chunks_jsonl(passages_source, jsonl_path)
     LOGGER.info(
         "passages_written=%s path=%s",
         passage_count,
@@ -149,18 +209,26 @@ def run_ingest_multihop(
             extra={"stage": "sparse_index"},
         )
 
-    ratio = _passage_ratio(passage_count, loader.expected_passage_count)
-    LOGGER.info(
-        "actual_passage_count=%s expected=%s ratio=%.4f",
-        passage_count,
-        loader.expected_passage_count,
-        ratio,
-        extra={"stage": "reconcile"},
-    )
-    if _is_anomalous_ratio(ratio):
-        LOGGER.warning(
-            "anomaly=true reason=ratio_out_of_band ratio=%.4f",
+    if sample_size is None:
+        ratio = _passage_ratio(passage_count, loader.expected_passage_count)
+        LOGGER.info(
+            "actual_passage_count=%s expected=%s ratio=%.4f",
+            passage_count,
+            loader.expected_passage_count,
             ratio,
+            extra={"stage": "reconcile"},
+        )
+        if _is_anomalous_ratio(ratio):
+            LOGGER.warning(
+                "anomaly=true reason=ratio_out_of_band ratio=%.4f",
+                ratio,
+                extra={"stage": "reconcile"},
+            )
+    else:
+        LOGGER.info(
+            "mode=sampled actual_passage_count=%s sample_size=%s",
+            passage_count,
+            sample_size,
             extra={"stage": "reconcile"},
         )
 
@@ -186,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parse_args(argv)
     setup_logging(level=logging.INFO)
     benchmark = MultihopBenchmark(args.dataset)
-    run_ingest_multihop(benchmark, dry_run=args.dry_run)
+    run_ingest_multihop(benchmark, dry_run=args.dry_run, sample_size=args.sample_size)
 
 
 if __name__ == "__main__":
