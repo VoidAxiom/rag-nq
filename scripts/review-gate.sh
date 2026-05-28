@@ -51,7 +51,7 @@ REPO="$(printf '%s' "$repo_json" | python3 -c 'import json,sys;print(json.load(s
 # never lost no matter how many replies a thread accrues; `recent` = the tail
 # (latest state, e.g. a fix reply). Codex re-reviews land as NEW threads, so
 # the gate is "zero unresolved Codex threads", not an in-thread re-review.
-Q='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){mergeable mergeStateStatus headRefOid comments(last:50){nodes{author{login} body createdAt}} reviews(last:30){nodes{author{login} state submittedAt commit{oid}}} reviewThreads(first:100){nodes{id isResolved isOutdated finding:comments(first:1){nodes{author{login} body path}} recent:comments(last:20){totalCount nodes{author{login} body}}}}}}}'
+Q='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){mergeable mergeStateStatus headRefOid comments(last:50){nodes{author{login} body createdAt}} reviews(last:30){nodes{author{login} body state submittedAt commit{oid}}} reviewThreads(first:100){nodes{id isResolved isOutdated finding:comments(first:1){nodes{author{login} body path}} recent:comments(last:20){totalCount nodes{author{login} body}}}}}}}'
 
 case "$cmd" in
   status)
@@ -191,7 +191,7 @@ for t in th:
     ACK_WAIT="${3:-120}"
     VERDICT_MAX="${4:-1800}"
     INT=30
-    WQ='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){mergeStateStatus headRefOid reviews(last:30){nodes{author{login} commit{oid}}} comments(last:50){nodes{author{login} body createdAt reactions(first:20){nodes{content user{login}}}}} reviewThreads(first:100){nodes{isResolved}}}}}'
+    WQ='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){mergeStateStatus headRefOid reviews(last:30){nodes{author{login} body commit{oid}}} comments(last:50){nodes{author{login} body createdAt reactions(first:20){nodes{content user{login}}}}} reviewThreads(first:100){nodes{isResolved}}}}}'
     # Capture BOTH the Codex-comment count AND the latest Codex-comment
     # timestamp at invocation. The timestamp is the load-bearing baseline:
     # a fresh clean comment must post-date it (server-side createdAt, no
