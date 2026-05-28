@@ -1,14 +1,31 @@
 import type {
   AnswerMetrics,
+  Citation,
+  CollectionChoice,
+  ComponentChoice,
+  ComponentSet,
+  ComponentsResponse,
+  EvalQuestion,
+  EvalQuestionsResponse,
+  GroundedAnswer,
+  LatencyBreakdown,
   LatencyMs,
   ModelSet,
+  PassageHit,
+  PerQueryMetrics,
   QualityMetrics,
+  QueryRequest,
+  QueryResponse,
+  RetrievalMode,
   RetrieverMetrics,
   Scoreboard,
   ScoreboardRow,
 } from '@/lib/types'
 
 const scoreboardPath = '/api/scoreboard'
+const componentsPath = '/api/components'
+const evalQuestionsPathPrefix = '/api/eval_questions'
+const queryPath = '/query'
 
 export async function fetchScoreboard(): Promise<Scoreboard> {
   const response = await fetch(scoreboardEndpoint())
@@ -28,14 +45,74 @@ export async function fetchScoreboard(): Promise<Scoreboard> {
   return parseScoreboard(payload)
 }
 
+export async function fetchComponents(): Promise<ComponentsResponse> {
+  const response = await fetch(apiBaseUrl(componentsPath))
+
+  if (!response.ok) {
+    throw new Error(await buildFailureMessage(response, 'Failed to fetch components'))
+  }
+
+  const payload: unknown = await response.json()
+  return parseComponentsResponse(payload)
+}
+
+export async function fetchEvalQuestions(
+  benchmark: string,
+): Promise<EvalQuestionsResponse> {
+  const endpoint = apiBaseUrl(
+    `${evalQuestionsPathPrefix}/${encodeURIComponent(benchmark)}`,
+  )
+  const response = await fetch(endpoint)
+
+  if (!response.ok) {
+    const detail = await readErrorDetail(response)
+
+    if (response.status === 503 && detail !== '') {
+      throw new Error(detail)
+    }
+
+    throw new Error(formatFailureMessage(response, 'Failed to fetch eval questions', detail))
+  }
+
+  const payload: unknown = await response.json()
+  return parseEvalQuestionsResponse(payload)
+}
+
+export async function postQuery(req: QueryRequest): Promise<QueryResponse> {
+  const response = await fetch(apiBaseUrl(queryPath), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(req),
+  })
+
+  if (!response.ok) {
+    const detail = await readErrorDetail(response)
+
+    if (response.status === 422 && detail !== '') {
+      throw new Error(detail)
+    }
+
+    throw new Error(formatFailureMessage(response, 'Failed to run query', detail))
+  }
+
+  const payload: unknown = await response.json()
+  return parseQueryResponse(payload)
+}
+
 function scoreboardEndpoint(): string {
+  return apiBaseUrl(scoreboardPath)
+}
+
+function apiBaseUrl(path: string): string {
   const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 
   if (baseUrl === '') {
-    return scoreboardPath
+    return path
   }
 
-  return `${baseUrl.replace(/\/+$/, '')}${scoreboardPath}`
+  return `${baseUrl.replace(/\/+$/, '')}${path}`
 }
 
 async function readErrorBody(response: Response): Promise<string> {
@@ -44,6 +121,47 @@ async function readErrorBody(response: Response): Promise<string> {
   } catch {
     return ''
   }
+}
+
+async function readErrorDetail(response: Response): Promise<string> {
+  const body = await readErrorBody(response)
+
+  if (body === '') {
+    return ''
+  }
+
+  try {
+    const payload: unknown = JSON.parse(body)
+
+    if (isRecord(payload) && 'detail' in payload) {
+      const detail = payload.detail
+
+      if (typeof detail === 'string') {
+        return detail
+      }
+
+      return JSON.stringify(detail)
+    }
+  } catch {
+    return body
+  }
+
+  return body
+}
+
+async function buildFailureMessage(
+  response: Response,
+  prefix: string,
+): Promise<string> {
+  return formatFailureMessage(response, prefix, await readErrorDetail(response))
+}
+
+function formatFailureMessage(response: Response, prefix: string, detail: string): string {
+  const statusText = response.statusText.trim()
+  const status = statusText ? `${response.status} ${statusText}` : `${response.status}`
+  const detailSuffix = detail === '' ? '' : `: ${detail}`
+
+  return `${prefix} (${status})${detailSuffix}`
 }
 
 function parseScoreboard(value: unknown): Scoreboard {
@@ -135,6 +253,186 @@ function parseModelSet(value: Record<string, unknown>): ModelSet {
   }
 }
 
+function parseComponentsResponse(value: unknown): ComponentsResponse {
+  const response = requireApiRecord(value, 'components response')
+
+  return {
+    modes: requireArray(response, 'modes').map(parseRetrievalMode),
+    top_k_choices: requireArray(response, 'top_k_choices').map((item) =>
+      parsePositiveInteger(item, 'top_k_choices item'),
+    ),
+    rerankers: requireArray(response, 'rerankers').map(parseComponentChoice),
+    generators: requireArray(response, 'generators').map(parseComponentChoice),
+    collections: requireArray(response, 'collections').map(parseCollectionChoice),
+    openai_enabled: requireBoolean(response, 'openai_enabled'),
+    embedder: requireApiString(response, 'embedder'),
+  }
+}
+
+function parseEvalQuestionsResponse(value: unknown): EvalQuestionsResponse {
+  const response = requireApiRecord(value, 'eval questions response')
+
+  return {
+    benchmark: requireApiString(response, 'benchmark'),
+    questions: requireArray(response, 'questions').map(parseEvalQuestion),
+  }
+}
+
+function parseQueryResponse(value: unknown): QueryResponse {
+  const response = requireApiRecord(value, 'query response')
+
+  return {
+    query: requireApiString(response, 'query'),
+    retrieved_passages: parseNullableApiArray(
+      response.retrieved_passages,
+      'retrieved_passages',
+      parsePassageHit,
+    ),
+    grounded: parseNullableApiRecord(response.grounded, 'grounded', parseGroundedAnswer),
+    metrics: parseNullableApiRecord(response.metrics, 'metrics', parsePerQueryMetrics),
+    components_used: parseNullableApiRecord(
+      response.components_used,
+      'components_used',
+      parseComponentSet,
+    ),
+    latency_ms: parseNullableApiRecord(
+      response.latency_ms,
+      'latency_ms',
+      parseLatencyBreakdown,
+    ),
+    query_id: requireApiNullableString(response, 'query_id'),
+  }
+}
+
+function parseRetrievalMode(value: unknown): RetrievalMode {
+  if (value === 'dense' || value === 'sparse' || value === 'hybrid') {
+    return value
+  }
+
+  throw new Error('Invalid API payload: retrieval mode is invalid')
+}
+
+function parseComponentChoice(value: unknown): ComponentChoice {
+  const choice = requireApiRecord(value, 'component choice')
+  const parsed: ComponentChoice = {
+    name: requireApiString(choice, 'name'),
+    label: requireApiString(choice, 'label'),
+  }
+  const enabled = choice.enabled
+  const disabledReason = choice.disabled_reason
+
+  if (enabled !== undefined) {
+    parsed.enabled = requireBoolean(choice, 'enabled')
+  }
+
+  if (disabledReason !== undefined) {
+    parsed.disabled_reason = requireApiNullableString(choice, 'disabled_reason')
+  }
+
+  return parsed
+}
+
+function parseCollectionChoice(value: unknown): CollectionChoice {
+  const choice = requireApiRecord(value, 'collection choice')
+
+  return {
+    benchmark: requireApiString(choice, 'benchmark'),
+    collection: requireApiString(choice, 'collection'),
+  }
+}
+
+function parseEvalQuestion(value: unknown): EvalQuestion {
+  const question = requireApiRecord(value, 'eval question')
+  const parsed: EvalQuestion = {
+    query_id: requireApiString(question, 'query_id'),
+    query: requireApiString(question, 'query'),
+    gold_answers: requireStringArray(question, 'gold_answers'),
+    supporting_passage_ids: requireStringArray(question, 'supporting_passage_ids'),
+  }
+  const notes = question.notes
+
+  if (notes !== undefined) {
+    parsed.notes = requireApiNullableString(question, 'notes')
+  }
+
+  return parsed
+}
+
+function parsePerQueryMetrics(value: Record<string, unknown>): PerQueryMetrics {
+  return {
+    em: requireNullableRate(value, 'em'),
+    f1: requireNullableRate(value, 'f1'),
+    supporting_fact_recall_at_k: requireNullableRate(
+      value,
+      'supporting_fact_recall_at_k',
+    ),
+    k_used: requireNullableNonNegativeNumber(value, 'k_used'),
+  }
+}
+
+function parseComponentSet(value: Record<string, unknown>): ComponentSet {
+  return {
+    mode: parseRetrievalMode(value.mode),
+    top_k: parsePositiveInteger(value.top_k, 'top_k'),
+    reranker: requireApiString(value, 'reranker'),
+    generator: requireApiString(value, 'generator'),
+    embedder: requireApiString(value, 'embedder'),
+    collection: requireApiString(value, 'collection'),
+  }
+}
+
+function parseLatencyBreakdown(value: Record<string, unknown>): LatencyBreakdown {
+  return {
+    retrieval_ms: requireApiNonNegativeNumber(value, 'retrieval_ms'),
+    rerank_ms: requireApiNonNegativeNumber(value, 'rerank_ms'),
+    generation_ms: requireApiNonNegativeNumber(value, 'generation_ms'),
+    total_ms: requireApiNonNegativeNumber(value, 'total_ms'),
+  }
+}
+
+function parsePassageHit(value: unknown): PassageHit {
+  const passage = requireApiRecord(value, 'passage hit')
+
+  return {
+    point_id: requireApiString(passage, 'point_id'),
+    text: requireApiString(passage, 'text'),
+    context_text: optionalNullableString(passage, 'context_text'),
+    title: optionalNullableString(passage, 'title'),
+    document_url: optionalNullableString(passage, 'document_url'),
+    dense_rank: optionalNullableNumber(passage, 'dense_rank'),
+    sparse_rank: optionalNullableNumber(passage, 'sparse_rank'),
+    fusion_rank: optionalNullableNumber(passage, 'fusion_rank'),
+    rerank_rank: optionalNullableNumber(passage, 'rerank_rank'),
+    dense_score: optionalNullableNumber(passage, 'dense_score'),
+    sparse_score: optionalNullableNumber(passage, 'sparse_score'),
+    rerank_score: optionalNullableNumber(passage, 'rerank_score'),
+  }
+}
+
+function parseCitation(value: unknown): Citation {
+  const citation = requireApiRecord(value, 'citation')
+
+  return {
+    point_id: requireApiString(citation, 'point_id'),
+  }
+}
+
+function parseGroundedAnswer(value: Record<string, unknown>): GroundedAnswer {
+  const parsed: GroundedAnswer = {
+    answer: requireApiString(value, 'answer'),
+    citations: requireArray(value, 'citations').map(parseCitation),
+    abstained: requireBoolean(value, 'abstained'),
+    supporting_point_ids: requireStringArray(value, 'supporting_point_ids'),
+  }
+  const reason = value.abstention_reason
+
+  if (reason !== undefined) {
+    parsed.abstention_reason = requireApiNullableString(value, 'abstention_reason')
+  }
+
+  return parsed
+}
+
 function parseNullableRecord<T>(
   value: unknown,
   fieldName: string,
@@ -216,6 +514,198 @@ function requireNumber(record: Record<string, unknown>, fieldName: string): numb
 
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`Invalid scoreboard payload: ${fieldName} must be a finite number`)
+  }
+
+  return value
+}
+
+function requireApiRecord(value: unknown, fieldName: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid API payload: ${fieldName} must be an object`)
+  }
+
+  return value
+}
+
+function requireArray(record: Record<string, unknown>, fieldName: string): unknown[] {
+  const value = record[fieldName]
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid API payload: ${fieldName} must be an array`)
+  }
+
+  return value
+}
+
+function parseNullableApiArray<T>(
+  value: unknown,
+  fieldName: string,
+  parser: (item: unknown) => T,
+): T[] | null {
+  if (value === null) {
+    return null
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid API payload: ${fieldName} must be an array or null`)
+  }
+
+  return value.map(parser)
+}
+
+function parseNullableApiRecord<T>(
+  value: unknown,
+  fieldName: string,
+  parser: (record: Record<string, unknown>) => T,
+): T | null {
+  if (value === null) {
+    return null
+  }
+
+  return parser(requireApiRecord(value, fieldName))
+}
+
+function requireApiString(record: Record<string, unknown>, fieldName: string): string {
+  const value = record[fieldName]
+
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid API payload: ${fieldName} must be a string`)
+  }
+
+  return value
+}
+
+function requireApiNullableString(
+  record: Record<string, unknown>,
+  fieldName: string,
+): string | null {
+  const value = record[fieldName]
+
+  if (value === null) {
+    return null
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid API payload: ${fieldName} must be a string or null`)
+  }
+
+  return value
+}
+
+function optionalNullableString(
+  record: Record<string, unknown>,
+  fieldName: string,
+): string | null | undefined {
+  if (record[fieldName] === undefined) {
+    return undefined
+  }
+
+  return requireApiNullableString(record, fieldName)
+}
+
+function requireStringArray(
+  record: Record<string, unknown>,
+  fieldName: string,
+): string[] {
+  return requireArray(record, fieldName).map((item) => {
+    if (typeof item !== 'string') {
+      throw new Error(`Invalid API payload: ${fieldName} items must be strings`)
+    }
+
+    return item
+  })
+}
+
+function requireBoolean(record: Record<string, unknown>, fieldName: string): boolean {
+  const value = record[fieldName]
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`Invalid API payload: ${fieldName} must be a boolean`)
+  }
+
+  return value
+}
+
+function parsePositiveInteger(value: unknown, fieldName: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    !Number.isFinite(value) ||
+    value <= 0
+  ) {
+    throw new Error(`Invalid API payload: ${fieldName} must be a positive integer`)
+  }
+
+  return value
+}
+
+function requireNullableRate(
+  record: Record<string, unknown>,
+  fieldName: string,
+): number | null {
+  const value = record[fieldName]
+
+  if (value === null) {
+    return null
+  }
+
+  const number = requireApiNumber(record, fieldName)
+
+  if (number < 0 || number > 1) {
+    throw new Error(`Invalid API payload: ${fieldName} must be between 0 and 1`)
+  }
+
+  return number
+}
+
+function requireNullableNonNegativeNumber(
+  record: Record<string, unknown>,
+  fieldName: string,
+): number | null {
+  const value = record[fieldName]
+
+  if (value === null) {
+    return null
+  }
+
+  return requireApiNonNegativeNumber(record, fieldName)
+}
+
+function requireApiNonNegativeNumber(
+  record: Record<string, unknown>,
+  fieldName: string,
+): number {
+  const value = requireApiNumber(record, fieldName)
+
+  if (value < 0) {
+    throw new Error(`Invalid API payload: ${fieldName} must be non-negative`)
+  }
+
+  return value
+}
+
+function optionalNullableNumber(
+  record: Record<string, unknown>,
+  fieldName: string,
+): number | null | undefined {
+  if (record[fieldName] === undefined) {
+    return undefined
+  }
+
+  const value = record[fieldName]
+
+  if (value === null) {
+    return null
+  }
+
+  return requireApiNumber(record, fieldName)
+}
+
+function requireApiNumber(record: Record<string, unknown>, fieldName: string): number {
+  const value = record[fieldName]
+
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Invalid API payload: ${fieldName} must be a finite number`)
   }
 
   return value

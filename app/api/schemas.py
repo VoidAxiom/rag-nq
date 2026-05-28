@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,61 @@ class QueryApiRequest(RetrieveRequest):
     """Request body for retrieve plus optional grounded generation."""
 
     generate: bool = True
+    collection: str | None = None
+    overrides: dict[str, Any] | None = None
+    gold_answers: list[str] | None = None
+    supporting_passage_ids: list[str] | None = None
+    query_id: str | None = None
+
+
+class EvalQuestion(BaseModel):
+    """One curated question for interactive evaluation."""
+
+    query_id: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+    gold_answers: list[str]
+    supporting_passage_ids: list[str]
+    notes: str | None = None
+
+
+class EvalQuestionsResponse(BaseModel):
+    """Curated evaluation questions for one benchmark."""
+
+    benchmark: Literal["nq", "hotpotqa", "2wikimhqa", "musique"]
+    questions: list[EvalQuestion]
+
+
+class ComponentChoice(BaseModel):
+    """Named component option exposed to clients."""
+
+    name: str
+    label: str
+
+
+class GeneratorChoice(ComponentChoice):
+    """Named generation option with availability metadata."""
+
+    enabled: bool
+    disabled_reason: str | None = None
+
+
+class CollectionChoice(BaseModel):
+    """Benchmark-to-collection option exposed to clients."""
+
+    benchmark: Literal["nq", "hotpotqa", "2wikimhqa", "musique"]
+    collection: str
+
+
+class ComponentsResponse(BaseModel):
+    """Interactive query component options."""
+
+    modes: list[Mode]
+    top_k_choices: list[int]
+    rerankers: list[ComponentChoice]
+    generators: list[GeneratorChoice]
+    collections: list[CollectionChoice]
+    openai_enabled: bool
+    embedder: str
 
 
 class ArtifactStatus(BaseModel):

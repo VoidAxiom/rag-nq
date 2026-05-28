@@ -6,6 +6,8 @@ retrieval-facing view (scores/ranks may be filled per pipeline stage in later mi
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -68,6 +70,35 @@ class RetrievalMetrics(BaseModel):
     timings: RetrievalStageTimings | None = None
 
 
+class PerQueryMetrics(BaseModel):
+    """Optional per-query answer and evidence metrics for interactive diagnostics."""
+
+    em: float | None = Field(default=None, ge=0.0, le=1.0)
+    f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    supporting_fact_recall_at_k: float | None = Field(default=None, ge=0.0, le=1.0)
+    k_used: int | None = Field(default=None, ge=0)
+
+
+class ComponentSet(BaseModel):
+    """Runtime components used to serve a query."""
+
+    mode: Literal["dense", "sparse", "hybrid"]
+    top_k: int = Field(ge=1)
+    reranker: str = Field(min_length=1)
+    generator: str = Field(min_length=1)
+    embedder: str = Field(min_length=1)
+    collection: str = Field(min_length=1)
+
+
+class LatencyBreakdown(BaseModel):
+    """Per-stage latency for one query in milliseconds."""
+
+    retrieval_ms: float = Field(default=0.0, ge=0.0)
+    rerank_ms: float = Field(default=0.0, ge=0.0)
+    generation_ms: float = Field(default=0.0, ge=0.0)
+    total_ms: float = Field(default=0.0, ge=0.0)
+
+
 class PassageHit(BaseModel):
     """A retrieved passage with optional per-retriever scores and ranks."""
 
@@ -124,3 +155,7 @@ class QueryResponse(BaseModel):
     retrieved_passages: list[PassageHit] | None = None
     retrieval_metrics: RetrievalMetrics | None = None
     grounded: GroundedAnswer | None = None
+    metrics: PerQueryMetrics | None = None
+    components_used: ComponentSet | None = None
+    latency_ms: LatencyBreakdown | None = None
+    query_id: str | None = None
