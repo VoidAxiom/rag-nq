@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from src.ingestion.models import IndexBuildManifest, Passage
+from src.ingestion.multihop_loader import MultihopBenchmark
 
 
 class PassageStore:
@@ -42,3 +43,9 @@ class PassageStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(manifest.model_dump(), handle, indent=2, sort_keys=True)
+
+    @staticmethod
+    def multihop_jsonl_path(benchmark: MultihopBenchmark, output_dir: Path) -> Path:
+        """Return the per-benchmark JSONL artifact path."""
+
+        return output_dir / f"multihop_passages__{benchmark.value}.jsonl"
