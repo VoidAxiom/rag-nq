@@ -47,7 +47,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> _CliArgs:
         "--sample-size",
         type=_positive_int,
         default=None,
-        help="Cap ingestion to the first N source rows from the multihop loader.",
+        help=(
+            "Cap ingestion to passages from first N source rows that emit passages "
+            "(deterministic passage-prefix)."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -104,10 +107,27 @@ def _write_index_chunks_jsonl(passages: Iterable[Passage], path: Path) -> int:
 
 
 def _cap_passages_by_row(passages: Iterator[Passage], max_rows: int) -> Iterator[Passage]:
-    """Yield all passages for the first ``max_rows`` source rows."""
+    """Yield every passage whose ``passage_id`` row-key falls within the prefix.
+
+    The prefix is the first ``max_rows`` distinct row-keys observed in the input
+    stream. Sampling happens at the passage-emission boundary (downstream of any
+    loader-side filtering of empty/whitespace paragraphs), not at the HF
+    source-row boundary. Deterministic: same loader output means same bytewise
+    emitted passages for a fixed ``max_rows``. Passage IDs must follow the
+    ``{prefix}-{row}-{para}`` multihop format so this wrapper can derive the
+    row-key safely. The underlying iterator is advanced at most one passage past
+    the cap (to discover the (N+1)th row-key); no subsequent passages are
+    consumed.
+    """
 
     seen_row_keys: set[str] = set()
     for passage in passages:
+        if passage.passage_id.count("-") < 2:
+            raise ValueError(
+                f"passage_id={passage.passage_id!r} does not match the "
+                "expected '{prefix}-{row}-{para}' multihop format; "
+                "_cap_passages_by_row cannot derive a row-key safely."
+            )
         row_key = passage.passage_id.rsplit("-", 1)[0]
         if row_key not in seen_row_keys:
             if len(seen_row_keys) >= max_rows:

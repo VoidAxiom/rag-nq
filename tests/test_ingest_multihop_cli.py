@@ -203,6 +203,73 @@ def test_sample_size_caps_hf_row_iterator(
     ]
 
 
+def test_cap_passages_yields_prefix_of_emitted_row_keys() -> None:
+    passage_ids = ("r-0-0", "r-0-1", "r-2-0", "r-2-1", "r-5-0", "r-9-0")
+    passages = [
+        Passage(
+            passage_id=passage_id,
+            text=f"text {passage_id}",
+            title=f"title {passage_id}",
+            source="unit",
+            question="q?",
+            long_answers=["a"],
+        )
+        for passage_id in passage_ids
+    ]
+
+    capped = list(ingest_multihop._cap_passages_by_row(iter(passages), max_rows=2))
+    capped_row_keys = [passage.passage_id.rsplit("-", 1)[0] for passage in capped]
+
+    assert capped_row_keys == ["r-0", "r-0", "r-2", "r-2"]
+    assert set(capped_row_keys) == {"r-0", "r-2"}
+    assert [passage.passage_id for passage in capped] == [
+        "r-0-0",
+        "r-0-1",
+        "r-2-0",
+        "r-2-1",
+    ]
+
+
+def test_cap_passages_rejects_malformed_passage_id() -> None:
+    passage = Passage(
+        passage_id="bare",
+        text="text",
+        title="title",
+        source="unit",
+        question="q?",
+        long_answers=["a"],
+    )
+
+    with pytest.raises(ValueError, match=r"passage_id=.*_cap_passages_by_row"):
+        list(ingest_multihop._cap_passages_by_row(iter([passage]), max_rows=1))
+
+
+def test_cap_passages_consumes_one_extra_probe_only() -> None:
+    passages = _make_row_passages(rows=4, paragraphs_per_row=3)
+    next_count = 0
+
+    def counted_passages() -> Iterator[Passage]:
+        nonlocal next_count
+        for passage in passages:
+            next_count += 1
+            yield passage
+
+    capped = list(ingest_multihop._cap_passages_by_row(counted_passages(), max_rows=2))
+
+    assert [passage.passage_id for passage in capped] == [
+        "musique-row0-0",
+        "musique-row0-1",
+        "musique-row0-2",
+        "musique-row1-0",
+        "musique-row1-1",
+        "musique-row1-2",
+    ]
+    accepted_prefix_count = 2 * 3
+    assert len(capped) == accepted_prefix_count
+    # 2 accepted rows * 3 passages each, plus one row2 probe to discover the cap.
+    assert next_count == accepted_prefix_count + 1
+
+
 def test_sample_size_suppresses_anomaly_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -523,6 +590,20 @@ def test_unknown_dataset_arg_rejected_by_argparse(capsys: pytest.CaptureFixture[
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "invalid choice" in captured.err
+
+
+def test_positive_int_validator_rejects_non_positive() -> None:
+    for rejected_sample_size in ("0", "-5"):
+        with pytest.raises(SystemExit) as exc_info:
+            ingest_multihop._parse_args(
+                ["--dataset", "musique", "--sample-size", rejected_sample_size]
+            )
+
+        assert exc_info.value.code == 2
+
+    args = ingest_multihop._parse_args(["--dataset", "musique", "--sample-size", "1"])
+
+    assert args.sample_size == 1
 
 
 def test_sparse_artifact_names_are_per_benchmark_for_indexers(
