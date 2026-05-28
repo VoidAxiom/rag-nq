@@ -59,6 +59,12 @@ TIER_1_OVERRIDE_KEYS = {
     "generation_provider",
     "generation_model_name",
 }
+_TIER_1_OVERRIDE_TYPES: dict[str, type] = {
+    "rerank_enabled": bool,
+    "rerank_model_name": str,
+    "generation_provider": str,
+    "generation_model_name": str,
+}
 OPENAI_OVERRIDE_ERROR = (
     "OpenAI generator requires both RAG_OPENAI_API_KEY and RAG_OPENAI_OPT_IN=1 to be set."
 )
@@ -366,6 +372,27 @@ def _build_effective_settings(app_settings: Settings, request: QueryApiRequest) 
     if invalid_keys:
         rejected = ", ".join(invalid_keys)
         raise HTTPException(status_code=422, detail=f"Unsupported override key(s): {rejected}")
+
+    for key, expected_type in _TIER_1_OVERRIDE_TYPES.items():
+        if key in overrides:
+            value = overrides[key]
+            if expected_type is bool:
+                if not isinstance(value, bool):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Override {key!r} must be a boolean; "
+                            f"got {type(value).__name__}."
+                        ),
+                    )
+            elif not isinstance(value, expected_type):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Override {key!r} must be a {expected_type.__name__}; "
+                        f"got {type(value).__name__}."
+                    ),
+                )
 
     if overrides.get("generation_provider") == "openai":
         openai_enabled, _disabled_reason = _openai_availability()

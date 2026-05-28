@@ -687,6 +687,106 @@ def test_query_endpoint_rejects_unknown_override_key(tmp_path: Path) -> None:
     assert "invalid_key" in response.json()["detail"]
 
 
+def test_query_rejects_non_boolean_rerank_enabled_override(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {"rerank_enabled": "false"},
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "rerank_enabled" in detail
+    assert "str" in detail
+
+
+def test_query_rejects_int_for_rerank_enabled_override(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {"rerank_enabled": 1},
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "rerank_enabled" in detail
+    assert "int" in detail
+
+
+def test_query_rejects_non_string_rerank_model_name_override(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {"rerank_model_name": 42},
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "rerank_model_name" in detail
+    assert "int" in detail
+
+
+def test_query_rejects_non_string_generation_provider_override(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {"generation_provider": None},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "generation_provider" in response.json()["detail"]
+
+
+def test_query_accepts_valid_typed_overrides(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": False,
+            "overrides": {
+                "rerank_enabled": False,
+                "rerank_model_name": "BAAI/bge-reranker-v2-m3",
+                "generation_provider": "heuristic",
+                "generation_model_name": "local-grounded-heuristic",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+
+
 def test_query_endpoint_passes_collection_override_to_retriever_factory(tmp_path: Path) -> None:
     captured: dict[str, str] = {}
 
