@@ -48,10 +48,10 @@ def test_root_endpoint_points_to_api_docs_and_core_routes(tmp_path: Path) -> Non
     assert response.json() == {
         "service": "rag-nq-showcase",
         "docs_url": "/docs",
-        "health_url": "/health",
-        "config_url": "/config",
-        "retrieve_url": "/retrieve",
-        "query_url": "/query",
+        "health_url": "/api/health",
+        "config_url": "/api/config",
+        "retrieve_url": "/api/retrieve",
+        "query_url": "/api/query",
     }
 
 
@@ -67,7 +67,7 @@ def test_favicon_endpoint_avoids_browser_404_noise(tmp_path: Path) -> None:
 def test_health_endpoint_returns_ok(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
-    response = client.get("/health")
+    response = client.get("/api/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "rag-nq-showcase"}
@@ -84,7 +84,7 @@ def test_config_endpoint_exposes_safe_runtime_metadata(tmp_path: Path) -> None:
     settings.index_chunks_path.write_text("{}\n", encoding="utf-8")
     client = _client(tmp_path, settings=settings)
 
-    response = client.get("/config")
+    response = client.get("/api/config")
 
     assert response.status_code == 200
     payload = response.json()
@@ -103,7 +103,7 @@ def test_retrieve_endpoint_returns_hits_and_metrics(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/retrieve",
+        "/api/retrieve",
         json={"query": "What is Paris?", "top_k": 1, "mode": "sparse"},
     )
 
@@ -119,7 +119,7 @@ def test_query_endpoint_can_generate_grounded_answer(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={"query": "What is Paris?", "top_k": 1, "mode": "hybrid", "generate": True},
     )
 
@@ -134,7 +134,7 @@ def test_query_endpoint_can_skip_generation(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={"query": "What is Paris?", "top_k": 1, "mode": "dense", "generate": False},
     )
 
@@ -152,7 +152,7 @@ def test_retrieve_endpoint_maps_runtime_failures_to_503(tmp_path: Path) -> None:
 
     client = _client(tmp_path, retriever_factory=failing_retriever_factory)
 
-    response = client.post("/retrieve", json={"query": "q", "top_k": 1, "mode": "dense"})
+    response = client.post("/api/retrieve", json={"query": "q", "top_k": 1, "mode": "dense"})
 
     assert response.status_code == 503
     assert response.json()["detail"] == "qdrant down"
@@ -301,7 +301,7 @@ def test_query_endpoint_computes_em_and_f1_for_matching_gold_answer(tmp_path: Pa
     client = _client_with_answer(tmp_path, answer="Paris")
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is the capital of France?",
             "top_k": 1,
@@ -323,7 +323,7 @@ def test_query_endpoint_computes_zero_em_and_f1_for_mismatched_gold_answer(
     client = _client_with_answer(tmp_path, answer="Paris")
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is the capital of France?",
             "top_k": 1,
@@ -343,7 +343,7 @@ def test_query_endpoint_computes_supporting_fact_recall_at_k(tmp_path: Path) -> 
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -365,7 +365,7 @@ def test_query_supporting_recall_uses_request_top_k_not_returned_count(
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 10,
@@ -385,7 +385,7 @@ def test_query_endpoint_accepts_rerank_enabled_override(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -403,7 +403,7 @@ def test_query_rerank_enabled_false_wins_over_rerank_model_name(tmp_path: Path) 
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -426,7 +426,7 @@ def test_query_components_used_reports_reranker_off_for_dense_mode(
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -449,7 +449,7 @@ def test_query_components_used_reports_reranker_off_for_sparse_mode(
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -472,7 +472,7 @@ def test_query_components_used_reports_reranker_for_hybrid_mode(
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -496,7 +496,7 @@ def test_query_endpoint_accepts_rerank_model_name_override(tmp_path: Path) -> No
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -521,7 +521,7 @@ def test_query_endpoint_rejects_openai_override_when_env_not_opted_in(
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -562,7 +562,7 @@ def test_query_openai_override_defaults_to_gpt4o_and_rag_key_env(
     client = TestClient(app)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -607,7 +607,7 @@ def test_query_openai_override_clears_stale_generation_api_url(
     client = TestClient(app)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -647,7 +647,7 @@ def test_query_openai_override_respects_explicit_model_name(
     client = TestClient(app)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -673,7 +673,7 @@ def test_query_endpoint_rejects_unknown_override_key(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -691,7 +691,7 @@ def test_query_rejects_non_boolean_rerank_enabled_override(tmp_path: Path) -> No
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -711,7 +711,7 @@ def test_query_rejects_int_for_rerank_enabled_override(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -731,7 +731,7 @@ def test_query_rejects_non_string_rerank_model_name_override(tmp_path: Path) -> 
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -751,7 +751,7 @@ def test_query_rejects_non_string_generation_provider_override(tmp_path: Path) -
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -769,7 +769,7 @@ def test_query_accepts_valid_typed_overrides(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -797,7 +797,7 @@ def test_query_endpoint_passes_collection_override_to_retriever_factory(tmp_path
     client = _client(tmp_path, retriever_factory=capturing_retriever_factory)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -815,7 +815,7 @@ def test_query_endpoint_reports_latency_breakdown_when_generation_runs(tmp_path:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={"query": "What is Paris?", "top_k": 1, "mode": "hybrid", "generate": True},
     )
 
@@ -830,7 +830,7 @@ def test_query_endpoint_echoes_query_id(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -872,7 +872,7 @@ def test_query_rejects_unsupported_generation_provider_value(tmp_path: Path) -> 
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -895,7 +895,7 @@ def test_query_accepts_http_json_generation_provider_override(tmp_path: Path) ->
     client = _client(tmp_path)
 
     response = client.post(
-        "/query",
+        "/api/query",
         json={
             "query": "What is Paris?",
             "top_k": 1,
@@ -906,3 +906,42 @@ def test_query_accepts_http_json_generation_provider_override(tmp_path: Path) ->
     )
 
     assert response.status_code == 200
+
+
+def test_all_api_routes_are_namespaced_under_api_prefix(tmp_path: Path) -> None:
+    """Regression guard for VOI-302: every non-SPA route must live under /api/*.
+
+    VOI-293 P1-F shipped a frontend that calls /query, but Vite's dev proxy
+    only forwards /api/*. The mismatch broke /ask in production. This test
+    ensures no future route lands at the root path again.
+    """
+    from starlette.routing import Mount
+
+    app = create_app(settings=Settings(output_dir=tmp_path / "artifacts"))
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if path is None:
+            continue
+        # SPA mount, favicon, FastAPI docs, and the StaticFiles catch-all are
+        # allowed at root. Everything else MUST be under /api/*.
+        if path in {
+            "/",
+            "/favicon.ico",
+            "/openapi.json",
+            "/docs",
+            "/docs/oauth2-redirect",
+            "/redoc",
+        }:
+            continue
+        if isinstance(route, Mount):
+            # Static-asset mounts (e.g. /assets via StaticFiles) and the
+            # SPA fallback are not /api/* endpoints; the SPA test above
+            # already covers the fallback shape.
+            continue
+        if path.startswith("/{") or path == "/{full_path:path}":
+            # SPA catch-all path-parameter route.
+            continue
+        assert path.startswith("/api/"), (
+            f"Route {path!r} is not under /api/*; Vite dev proxy will 404. "
+            f"Add it under /api/* or extend the allowed-non-api list."
+        )
