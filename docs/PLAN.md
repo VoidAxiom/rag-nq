@@ -243,8 +243,9 @@ gates (typecheck, tests, lint) are necessary but never sufficient.
   config combination tested so far, with retriever metrics (Recall@K,
   MRR@10, NDCG@10) and (when generation is enabled) answer metrics
   (EM, F1, faithfulness, context precision/recall).
-* `app/streamlit_app.py` — new "Scoreboard" page reading
-  `artifacts/scoreboard.json` and rendering a sortable table.
+* `app/web/src/pages/ScoreboardPage.tsx` — `/scoreboard` React route
+  reading `GET /api/scoreboard` (which serves `artifacts/scoreboard.json`)
+  and rendering a sortable shadcn-ui `<Table>`.
 * NQ-dev baseline run committed: vanilla → Qwen3-Embed-4B + BGE-rerank
   → scoreboard row.
 
@@ -280,8 +281,7 @@ This packet is not done when code merges. It's done when:
    completes and `artifacts/retrieval_eval_p0.json` contains
    `recall@10 > <previous-MiniLM-baseline-recall@10>` (we expect a
    measurable lift from MiniLM to Qwen3-4B).
-4. `uv run streamlit run app/streamlit_app.py`, the Scoreboard page
-   loads, and rows for the new baseline are visible.
+4. `(cd app/web && npm install && npm run build) && RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn app.api.main:app` (FastAPI-served path; the subshell keeps `uvicorn` at the repo root so `app.api.main` imports correctly and the `RAG_WEB_DIST_PATH` relative path resolves to `<repo>/app/web/dist`). Browse `/scoreboard` and rows for the new baseline are visible. (The Vite dev variant `cd app/web && npm run dev` requires a second terminal also running `uv run uvicorn app.api.main:app` from the repo root, because Vite proxies `/api/*` to FastAPI on port 8000 — see §7. The FastAPI-served path is the canonical acceptance command.)
 
 **Packet allowlist (P0):**
 
@@ -293,8 +293,8 @@ This packet is not done when code merges. It's done when:
 * `src/scripts/index_dense.py`
 * `src/scripts/eval_retrieval.py`
 * `src/evaluation/scoreboard.py` (new file)
-* `app/streamlit_app.py`
-* `app/api/main.py` (no behavioral change beyond exposing new mode)
+* `app/web/src/pages/ScoreboardPage.tsx` (the React route reading `/api/scoreboard`)
+* `app/api/main.py` (adds `GET /api/scoreboard` endpoint serving `artifacts/scoreboard.json`)
 * `tests/test_retrieval_eval.py`
 * `tests/test_scoreboard.py` (new file)
 * `pyproject.toml` (dependency adds: `mlx`, `mlx-lm` if Qwen3 served via MLX)
@@ -318,7 +318,7 @@ This packet is not done when code merges. It's done when:
   all three multi-hop benchmarks. **This is the project's humility
   line** — expected MuSiQue F1 ≈ 20 with vanilla dense; we deliberately
   set the low bar so subsequent phases' lifts are visible.
-* Streamlit Scoreboard page now shows all four benchmarks (NQ + 3
+* React `/scoreboard` route now shows all four benchmarks (NQ + 3
   multi-hop).
 
 **Why:**
@@ -343,7 +343,7 @@ each lift attributable.
 * `src/scripts/ingest_multihop.py` (new)
 * `src/scripts/eval_multihop.py` (new)
 * `src/evaluation/multihop_eval.py` (new)
-* `app/streamlit_app.py`
+* `app/web/src/pages/ScoreboardPage.tsx` (extend to render multi-hop rows)
 * `tests/test_multihop_loader.py` (new)
 * `tests/test_multihop_eval.py` (new)
 * `pyproject.toml`, `uv.lock`
@@ -364,9 +364,10 @@ each lift attributable.
   retriever conforming to the existing `Retriever` protocol.
 * Hybrid retriever extended: dense + sparse fusion → ColBERT-v2 rerank
   pass on the top-N → final top-K.
-* Streamlit retrieval-trace visualization: for a query, show overlap
-  Venn (dense top-K vs sparse top-K vs ColBERT top-K), MaxSim heatmap
-  for the ColBERT pass.
+* React `/retrieval-trace` visualization page: for a query, show
+  overlap Venn (dense top-K vs sparse top-K vs ColBERT top-K), MaxSim
+  heatmap for the ColBERT pass. (Distinct from §7's `/trace` which is
+  reserved for the P5 Search-o1 iterative-reasoning hops viewer.)
 * Scoreboard updated: hybrid+ColBERT rows added for NQ and all three
   multi-hop benchmarks. Expected modest lift on multi-hop recall (~5-10
   points).
@@ -387,7 +388,7 @@ showcase value.
    throughput logged.
 3. Eval re-run shows measurable lift on MuSiQue Recall@5 vs P1 vanilla
    (target: +5 points minimum).
-4. Streamlit query trace page renders the Venn + heatmap.
+4. React `/retrieval-trace` page renders the Venn + heatmap.
 
 **Packet allowlist (P2):**
 
@@ -395,7 +396,7 @@ showcase value.
 * `src/retrieval/qdrant_retrievers.py` (extension)
 * `src/scripts/index_colbert.py` (new)
 * `src/scripts/migrate_collections_add_multivector.py` (new)
-* `app/streamlit_app.py`, `app/ui/display.py`
+* `app/web/src/pages/RetrievalTracePage.tsx` (new — retrieval-trace viz)
 * `tests/test_colbert_retriever.py` (new)
 * `pyproject.toml`, `uv.lock` (fastembed addition)
 
@@ -425,7 +426,8 @@ showcase value.
   3. Filtered triples seed a Personalized PageRank walk over the
      unified passage+phrase graph (NetworkX or igraph).
   4. Top-N passages by PPR mass returned.
-* `app/streamlit_app.py` — graph visualizer page (cytoscape / d3): for
+* `app/web/src/pages/GraphPage.tsx` — `/graph` graph-visualizer route
+  (cytoscape via `react-cytoscapejs` or `react-force-graph-2d`): for
   a query, show the seeded triples and the PPR walk's top-mass nodes.
 * Scoreboard updated: HippoRAG 2 rows for the three multi-hop benchmarks.
   **Target: MuSiQue F1 ≥ 45, 2WikiMHQA Recall@5 ≥ 90** (match published
@@ -446,7 +448,7 @@ the project's load-bearing phase.
    for a ~100K-passage corpus).
 2. `uv run python -m src.scripts.eval_multihop --pipeline hipporag2`
    produces a scoreboard row meeting or exceeding the target floor.
-3. Streamlit graph visualizer renders for at least 5 hand-picked
+3. React `/graph` page renders for at least 5 hand-picked
    MuSiQue queries; visible cluster of relevant phrase nodes around
    the PPR-top passages.
 
@@ -456,7 +458,7 @@ the project's load-bearing phase.
 * `src/retrieval/kg/` (new dir: openie.py, graph_builder.py, ppr.py)
 * `src/scripts/build_kg.py` (new)
 * `src/scripts/eval_multihop.py` (extension)
-* `app/streamlit_app.py`, `app/ui/graph_viz.py` (new)
+* `app/web/src/pages/GraphPage.tsx` (new — PPR walk viz)
 * `tests/test_hipporag_retriever.py` (new)
 * `tests/test_kg_builder.py` (new)
 * `pyproject.toml`, `uv.lock` (networkx / igraph, gliner, glirel)
@@ -494,7 +496,7 @@ don't know."
    classifier checkpoint saved to `artifacts/router/`.
 2. `/query` endpoint with `adaptive=true` correctly routes 5 hand-picked
    queries (visible in API response trace).
-3. Streamlit scoreboard now has a "Adaptive vs Always-Heavy vs
+3. React `/scoreboard` now has an "Adaptive vs Always-Heavy vs
    Always-Fast" Pareto plot.
 
 **Packet allowlist (P4):**
@@ -524,9 +526,10 @@ don't know."
      back into the reasoning stream. This avoids context dilution.
   4. Loop continues for up to 3 iterations or until the model emits
      a final answer.
-* `app/streamlit_app.py` — trace viewer page: for any query, render
-  each hop's emitted query, retrieved passages (collapsible), the
-  Reason-in-Documents summary, and the running reasoning delta.
+* `app/web/src/pages/TraceViewerPage.tsx` — `/trace` viewer route: for
+  any query, render each hop's emitted query, retrieved passages
+  (collapsible), the Reason-in-Documents summary, and the running
+  reasoning delta.
 * Scoreboard updated: Search-o1 rows for multi-hop benchmarks.
   **Target: MuSiQue F1 ≥ 55, HotpotQA EM ≥ 50.**
 
@@ -554,7 +557,7 @@ reasoning stream.
 * `src/reasoning/reason_in_documents.py` (new)
 * `src/reasoning/llm_client.py` (new — local MLX client; abstracted for
   Qwen3-8B / 14B)
-* `app/streamlit_app.py`, `app/ui/trace_viewer.py` (new)
+* `app/web/src/pages/TraceViewerPage.tsx` (new — Search-o1 hops viewer)
 * `tests/test_search_o1.py` (new)
 * `tests/test_reason_in_documents.py` (new)
 * `pyproject.toml`, `uv.lock`
@@ -628,7 +631,7 @@ keeps EM honest under inspection.
   graph+iterative wins on cross-document synthesis (the multi-hop
   regime); long-context wins on simple lookup. This is the *honest
   comparator*.
-* Final Streamlit pages:
+* Final React pages:
   * **Master Scoreboard** — every benchmark × every pipeline variant ×
     latency p50/p95 × answer quality. Sortable, filterable.
   * **Compare Two Pipelines** — pick any query, pick any two pipeline
@@ -652,15 +655,16 @@ page, the quantitative case for each technique on each benchmark.
 2. Master scoreboard renders all rows from all phases without errors.
 3. Compare-two-pipelines page works for at least 10 hand-picked queries
    per multi-hop benchmark.
-4. `README.md` end-to-end "clone → docker compose up → build_indexes →
-   streamlit run" instructions reproduce the showcase on a clean machine
-   (in a clean clone, by Claude personally).
+4. `README.md` end-to-end "clone → docker compose up -d qdrant →
+   build_indexes → (cd app/web && npm run build) → uvicorn with
+   RAG_WEB_DIST_PATH → browse /scoreboard" instructions reproduce the
+   showcase on a clean machine (in a clean clone, by Claude personally).
 
 **Packet allowlist (P7):**
 
 * `src/reasoning/long_context_baseline.py` (new)
 * `src/evaluation/scoreboard.py` (final aggregation)
-* `app/streamlit_app.py`, `app/ui/scoreboard_page.py`, `app/ui/compare_page.py`
+* `app/web/src/pages/ScoreboardPage.tsx`, `app/web/src/pages/ComparePage.tsx` (new — side-by-side)
 * `README.md`
 * `tests/test_long_context_baseline.py` (new)
 * `tests/test_scoreboard_aggregation.py` (new)
