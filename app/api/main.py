@@ -383,7 +383,17 @@ def _build_effective_settings(app_settings: Settings, request: QueryApiRequest) 
             if "rerank_enabled" not in overrides:
                 update_dict["rerank_enabled"] = True
     if "generation_provider" in overrides:
-        update_dict["generation_provider"] = overrides["generation_provider"]
+        provider = overrides["generation_provider"]
+        update_dict["generation_provider"] = provider
+        if provider == "openai":
+            # Wire defaults that match /api/components's documented opt-in
+            # (RAG_OPENAI_API_KEY + RAG_OPENAI_OPT_IN=1) and the dropdown
+            # label ("OpenAI GPT-4o"); explicit overrides still win below.
+            # generation_api_url is explicitly nulled to prevent a stale
+            # http_json env URL from receiving the OpenAI bearer token.
+            update_dict["generation_model_name"] = "gpt-4o"
+            update_dict["generation_api_key_env"] = "RAG_OPENAI_API_KEY"
+            update_dict["generation_api_url"] = None
     if "generation_model_name" in overrides:
         update_dict["generation_model_name"] = overrides["generation_model_name"]
 

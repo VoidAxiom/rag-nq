@@ -467,6 +467,136 @@ def test_query_endpoint_rejects_openai_override_when_env_not_opted_in(
     )
 
 
+def test_query_openai_override_defaults_to_gpt4o_and_rag_key_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("RAG_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("RAG_OPENAI_OPT_IN", "1")
+    captured: dict[str, Settings] = {}
+
+    def capturing_retriever_factory(settings: Settings, mode: Mode) -> FakeRetriever:
+        captured["retriever"] = settings
+        return FakeRetriever(mode=mode)
+
+    def capturing_generator_factory(settings: Settings) -> FakeGenerator:
+        captured["generator"] = settings
+        return FakeGenerator()
+
+    app = create_app(
+        settings=Settings(output_dir=tmp_path / "artifacts"),
+        retriever_factory=capturing_retriever_factory,
+        generator_factory=capturing_generator_factory,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": True,
+            "overrides": {"generation_provider": "openai"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert "retriever" in captured
+    assert "generator" in captured
+    settings = captured["generator"]
+    assert settings.generation_provider == "openai"
+    assert settings.generation_model_name == "gpt-4o"
+    assert settings.generation_api_key_env == "RAG_OPENAI_API_KEY"
+
+
+def test_query_openai_override_clears_stale_generation_api_url(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("RAG_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("RAG_OPENAI_OPT_IN", "1")
+    captured: dict[str, Settings] = {}
+
+    def capturing_retriever_factory(settings: Settings, mode: Mode) -> FakeRetriever:
+        captured["retriever"] = settings
+        return FakeRetriever(mode=mode)
+
+    def capturing_generator_factory(settings: Settings) -> FakeGenerator:
+        captured["generator"] = settings
+        return FakeGenerator()
+
+    app = create_app(
+        settings=Settings(
+            output_dir=tmp_path / "artifacts",
+            generation_api_url="http://localhost:11434/v1/chat/completions",
+        ),
+        retriever_factory=capturing_retriever_factory,
+        generator_factory=capturing_generator_factory,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": True,
+            "overrides": {"generation_provider": "openai"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert "generator" in captured
+    settings = captured["generator"]
+    assert settings.generation_provider == "openai"
+    assert settings.generation_api_url is None
+
+
+def test_query_openai_override_respects_explicit_model_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("RAG_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("RAG_OPENAI_OPT_IN", "1")
+    captured: dict[str, Settings] = {}
+
+    def capturing_retriever_factory(settings: Settings, mode: Mode) -> FakeRetriever:
+        captured["retriever"] = settings
+        return FakeRetriever(mode=mode)
+
+    def capturing_generator_factory(settings: Settings) -> FakeGenerator:
+        captured["generator"] = settings
+        return FakeGenerator()
+
+    app = create_app(
+        settings=Settings(output_dir=tmp_path / "artifacts"),
+        retriever_factory=capturing_retriever_factory,
+        generator_factory=capturing_generator_factory,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "What is Paris?",
+            "top_k": 1,
+            "mode": "hybrid",
+            "generate": True,
+            "overrides": {
+                "generation_provider": "openai",
+                "generation_model_name": "gpt-4o-mini",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "retriever" in captured
+    assert "generator" in captured
+    settings = captured["generator"]
+    assert settings.generation_provider == "openai"
+    assert settings.generation_model_name == "gpt-4o-mini"
+    assert settings.generation_api_key_env == "RAG_OPENAI_API_KEY"
+
+
 def test_query_endpoint_rejects_unknown_override_key(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
