@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -104,7 +105,7 @@ def _run_dry_ingest(
     monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
     passages = _make_passages(actual_count, prefix="ratio")
     _patch_loader(monkeypatch, passages=passages, expected_count=expected_count)
-    ingest_multihop.main(["--dataset", "musique", "--dry-run"])
+    ingest_multihop.main(["--dataset", "musique", "--dry-run", "--force"])
 
 
 @pytest.mark.parametrize(
@@ -129,7 +130,7 @@ def test_dataset_argument_dispatches_to_correct_benchmark(
         expected_count=2,
     )
 
-    ingest_multihop.main(["--dataset", dataset_arg, "--dry-run"])
+    ingest_multihop.main(["--dataset", dataset_arg, "--dry-run", "--force"])
 
     assert calls == [expected_benchmark]
 
@@ -141,7 +142,7 @@ def test_jsonl_written_at_per_benchmark_path_with_index_chunk_shape(
     passages = _make_passages(3, prefix="synthetic")
     _patch_loader(monkeypatch, passages=passages, expected_count=3)
 
-    ingest_multihop.main(["--dataset", "musique", "--dry-run"])
+    ingest_multihop.main(["--dataset", "musique", "--dry-run", "--force"])
 
     jsonl_path = tmp_path / "multihop_passages__musique.jsonl"
     lines = jsonl_path.read_text(encoding="utf-8").splitlines()
@@ -181,7 +182,9 @@ def test_sample_size_caps_hf_row_iterator(
     passages = _make_row_passages(rows=10, paragraphs_per_row=3)
     _patch_loader(monkeypatch, passages=passages, expected_count=len(passages))
 
-    ingest_multihop.main(["--dataset", "musique", "--sample-size", "4", "--dry-run"])
+    ingest_multihop.main(
+        ["--dataset", "musique", "--sample-size", "4", "--dry-run", "--force"]
+    )
 
     jsonl_path = tmp_path / "multihop_passages__musique.jsonl"
     lines = jsonl_path.read_text(encoding="utf-8").splitlines()
@@ -281,7 +284,7 @@ def test_sample_size_suppresses_anomaly_flag(
 
     with caplog.at_level(logging.INFO):
         ingest_multihop.main(
-            ["--dataset", "musique", "--sample-size", "5000", "--dry-run"]
+            ["--dataset", "musique", "--sample-size", "5000", "--dry-run", "--force"]
         )
 
     warning_records = [
@@ -333,7 +336,7 @@ def test_sample_size_emits_sample_log_line(
 
     with caplog.at_level(logging.INFO):
         ingest_multihop.main(
-            ["--dataset", "musique", "--sample-size", "5000", "--dry-run"]
+            ["--dataset", "musique", "--sample-size", "5000", "--dry-run", "--force"]
         )
 
     sample_records = [
@@ -442,7 +445,7 @@ def test_per_benchmark_collection_name_passed_to_indexers(
     monkeypatch.setattr(ingest_multihop, "DenseIndexer", SpyDenseIndexer)
     monkeypatch.setattr(ingest_multihop, "SparseQdrantIndexer", SpySparseQdrantIndexer)
 
-    ingest_multihop.main(["--dataset", "musique"])
+    ingest_multihop.main(["--dataset", "musique", "--force"])
 
     assert len(dense_settings) == 1
     assert len(sparse_settings) == 1
@@ -475,7 +478,7 @@ def test_dry_run_skips_indexer_paths(
     monkeypatch.setattr(ingest_multihop, "SparseQdrantIndexer", FailSparseQdrantIndexer)
 
     with caplog.at_level(logging.INFO):
-        ingest_multihop.main(["--dataset", "musique", "--dry-run"])
+        ingest_multihop.main(["--dataset", "musique", "--dry-run", "--force"])
 
     assert instantiation_counts == {"dense": 0, "sparse": 0}
     assert (tmp_path / "multihop_passages__musique.jsonl").exists()
@@ -658,7 +661,7 @@ def test_sparse_artifact_names_are_per_benchmark_for_indexers(
     monkeypatch.setattr(ingest_multihop, "DenseIndexer", SpyDenseIndexer)
     monkeypatch.setattr(ingest_multihop, "SparseQdrantIndexer", SpySparseQdrantIndexer)
 
-    ingest_multihop.main(["--dataset", "musique"])
+    ingest_multihop.main(["--dataset", "musique", "--force"])
 
     assert len(dense_settings) == 1
     assert len(sparse_settings) == 1
@@ -672,3 +675,121 @@ def test_sparse_artifact_names_are_per_benchmark_for_indexers(
         )
         assert settings.sparse_pass1_file != "sparse_pass1.json"
         assert settings.sparse_manifest_file != "sparse_index_manifest.json"
+
+
+def test_memory_guard_aborts_below_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "psutil.virtual_memory",
+        lambda: SimpleNamespace(available=5 * 1024**3),
+    )
+
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as exc_info:
+        ingest_multihop.main(["--dataset", "musique"])
+
+    error_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "memory_guard" and record.levelno == logging.ERROR
+    ]
+    messages = [str(exc_info.value), *(record.getMessage() for record in error_records)]
+    assert any("memory_guard abort" in message and "5.00" in message for message in messages)
+
+
+def test_force_bypasses_memory_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "psutil.virtual_memory",
+        lambda: SimpleNamespace(available=5 * 1024**3),
+    )
+    _patch_loader(
+        monkeypatch,
+        passages=_make_passages(2, prefix="force"),
+        expected_count=2,
+    )
+
+    with caplog.at_level(logging.INFO):
+        ingest_multihop.main(["--dataset", "musique", "--force", "--dry-run"])
+
+    guard_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "memory_guard" and record.levelno == logging.INFO
+    ]
+    assert any(
+        "bypassed" in record.getMessage() and "--force" in record.getMessage()
+        for record in guard_records
+    )
+
+
+def test_force_without_dry_run_bypasses_memory_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("RAG_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "psutil.virtual_memory",
+        lambda: SimpleNamespace(available=5 * 1024**3),
+    )
+
+    # Stub indexers so the (non-dry-run) path completes without real I/O.
+    class StubDense:
+        def __init__(self, settings: Settings) -> None:
+            del settings
+
+        def build_from_jsonl_streaming(
+            self,
+            jsonl_path: Path,
+            *,
+            lines_per_batch: int,
+            max_index_rows: int | None = None,
+            max_passages: int | None = None,
+        ) -> DenseBuildResult:
+            del jsonl_path, lines_per_batch, max_index_rows, max_passages
+            return DenseBuildResult(vector_count=0, vector_size=0)
+
+    class StubSparse:
+        def __init__(self, settings: Settings) -> None:
+            del settings
+
+        def build_from_jsonl(
+            self,
+            jsonl_path: Path,
+            *,
+            max_index_rows: int | None = None,
+            max_passages: int | None = None,
+        ) -> SparseQdrantBuildResult:
+            del jsonl_path, max_index_rows, max_passages
+            return SparseQdrantBuildResult(
+                document_count=0, vocabulary_size=0, points_updated=0
+            )
+
+    monkeypatch.setattr(ingest_multihop, "DenseIndexer", StubDense)
+    monkeypatch.setattr(ingest_multihop, "SparseQdrantIndexer", StubSparse)
+    _patch_loader(
+        monkeypatch,
+        passages=_make_passages(2, prefix="force-real"),
+        expected_count=2,
+    )
+
+    with caplog.at_level(logging.INFO):
+        ingest_multihop.main(["--dataset", "musique", "--force"])
+
+    guard_records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "memory_guard" and record.levelno == logging.INFO
+    ]
+    assert any(
+        "bypassed" in record.getMessage() and "--force" in record.getMessage()
+        for record in guard_records
+    )

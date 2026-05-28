@@ -133,6 +133,18 @@ def _is_apple_silicon() -> bool:
         return False
 
 
+def _release_mps_cache() -> None:
+    """Release PyTorch MPS allocator cache when available."""
+
+    if not _is_apple_silicon():
+        return
+    import torch
+
+    empty_cache = getattr(getattr(torch, "mps", None), "empty_cache", None)
+    if callable(empty_cache):
+        empty_cache()
+
+
 def _qdrant_payload(record: IndexChunk | Passage) -> dict[str, object]:
     """Serialize fields stored alongside dense vectors."""
 
@@ -192,7 +204,7 @@ class DenseIndexer:
     ) -> None:
         self._settings = settings
         self._client = client or _build_default_qdrant_client(settings.qdrant_url)
-        self._model = model or build_embedder(settings.embedder_name)
+        self._model = model
 
     def build(self, passages: list[Passage]) -> DenseBuildResult:
         """Create or reuse collection and upsert all passage vectors."""
@@ -200,7 +212,7 @@ class DenseIndexer:
         with quiet_http_clients():
             self._ensure_collection(vector_size=self._embedding_dimension())
             texts = [_dense_embedding_text(passage) for passage in passages]
-            vectors = self._model.encode(
+            vectors = self._get_model().encode(
                 texts,
                 batch_size=self._settings.embedding_batch_size,
                 normalize_embeddings=True,
@@ -283,7 +295,7 @@ class DenseIndexer:
                 if not batch:
                     return
                 texts = [_dense_embedding_text(p) for p in batch]
-                vectors = self._model.encode(
+                vectors = self._get_model().encode(
                     texts,
                     batch_size=self._settings.embedding_batch_size,
                     normalize_embeddings=True,
@@ -322,6 +334,7 @@ class DenseIndexer:
                     vector_size=vector_size,
                     checkpoint=checkpoint_path,
                 )
+                _release_mps_cache()
                 batch = []
 
             for record in iter_index_records_jsonl(
@@ -371,7 +384,12 @@ class DenseIndexer:
         )
 
     def _embedding_dimension(self) -> int:
-        return int(self._model.get_sentence_embedding_dimension())
+        return int(self._get_model().get_sentence_embedding_dimension())
+
+    def _get_model(self) -> Embedder:
+        if self._model is None:
+            self._model = build_embedder(self._settings.embedder_name)
+        return self._model
 
 
 def _build_default_qdrant_client(url: str) -> Any:

@@ -30,6 +30,8 @@ _DATASET_CHOICES: tuple[str, ...] = tuple(benchmark.value for benchmark in Multi
 class _CliArgs:
     dataset: str
     dry_run: bool
+    min_available_ram_gb: float
+    force: bool
     sample_size: int | None
 
 
@@ -57,11 +59,48 @@ def _parse_args(argv: Sequence[str] | None = None) -> _CliArgs:
         action="store_true",
         help="Write artifacts and manifest without building dense or sparse indexes.",
     )
+    parser.add_argument(
+        "--min-available-ram-gb",
+        type=float,
+        default=20.0,
+        help="Minimum available RAM in GiB required at startup.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the startup memory-budget guard.",
+    )
     namespace = parser.parse_args(argv)
     return _CliArgs(
         dataset=namespace.dataset,
         dry_run=namespace.dry_run,
+        min_available_ram_gb=namespace.min_available_ram_gb,
+        force=namespace.force,
         sample_size=namespace.sample_size,
+    )
+
+
+def _check_memory_budget(min_gb: float, force: bool) -> None:
+    if force:
+        LOGGER.info("memory_guard bypassed (--force)", extra={"stage": "memory_guard"})
+        return
+
+    import psutil
+
+    available_gib = psutil.virtual_memory().available / (1024**3)
+    if available_gib < min_gb:
+        message = (
+            f"memory_guard abort available_gib={available_gib:.2f} "
+            f"min={min_gb:.2f}; free memory or pass --force to bypass"
+        )
+        LOGGER.error(message, extra={"stage": "memory_guard"})
+        raise SystemExit(message)
+
+    LOGGER.info(
+        "memory_guard pass available_gib=%.2f min=%.2f",
+        available_gib,
+        min_gb,
+        extra={"stage": "memory_guard"},
     )
 
 
@@ -253,6 +292,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     args = _parse_args(argv)
     setup_logging(level=logging.INFO)
+    _check_memory_budget(args.min_available_ram_gb, args.force)
     benchmark = MultihopBenchmark(args.dataset)
     run_ingest_multihop(benchmark, dry_run=args.dry_run, sample_size=args.sample_size)
 
