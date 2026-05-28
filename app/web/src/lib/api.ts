@@ -25,7 +25,7 @@ import type {
 const scoreboardPath = '/api/scoreboard'
 const componentsPath = '/api/components'
 const evalQuestionsPathPrefix = '/api/eval_questions'
-const queryPath = '/query'
+const queryPath = '/api/query'
 
 export async function fetchScoreboard(): Promise<Scoreboard> {
   const response = await fetch(scoreboardEndpoint())

@@ -92,15 +92,15 @@ describe('AskPage', () => {
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
-          ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+          ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
         ),
       ).toBe(true),
     )
     const queryCall = fetchMock.mock.calls.find(
-      ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+      ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
     )
     if (queryCall === undefined) {
-      throw new Error('Expected /query request body')
+      throw new Error('Expected /api/query request body')
     }
     const [, init] = queryCall
     const body = parseBody(init)
@@ -215,15 +215,15 @@ describe('AskPage', () => {
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
-          ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+          ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
         ),
       ).toBe(true),
     )
     const queryCall = fetchMock.mock.calls.find(
-      ([input, init]) => requestPath(input) === '/query' && init?.method === 'POST',
+      ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
     )
     if (queryCall === undefined) {
-      throw new Error('Expected /query request body')
+      throw new Error('Expected /api/query request body')
     }
     const [, init] = queryCall
     const body = parseBody(init)
@@ -324,7 +324,7 @@ function stubAskFetch({
       return Promise.resolve(jsonResponse(questions))
     }
 
-    if (method === 'POST' && path === '/query') {
+    if (method === 'POST' && path === '/api/query') {
       return Promise.resolve(jsonResponse(queryResponder(parseBody(init))))
     }
 

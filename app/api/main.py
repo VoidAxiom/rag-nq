@@ -127,21 +127,26 @@ def create_app(
     if not spa_enabled:
         @app.get("/", response_model=RootResponse)
         def root() -> RootResponse:
-            return RootResponse()
+            return RootResponse(
+                health_url="/api/health",
+                config_url="/api/config",
+                retrieve_url="/api/retrieve",
+                query_url="/api/query",
+            )
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
         return Response(status_code=204)
 
-    @app.get("/health", response_model=HealthResponse)
+    @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
 
-    @app.get("/config", response_model=RuntimeConfigResponse)
+    @app.get("/api/config", response_model=RuntimeConfigResponse)
     def config() -> RuntimeConfigResponse:
         return safe_runtime_config(app_settings)
 
-    @app.post("/retrieve", response_model=QueryResponse)
+    @app.post("/api/retrieve", response_model=QueryResponse)
     def retrieve(request: RetrieveRequest) -> QueryResponse:
         started_at = time.monotonic()
         try:
@@ -165,7 +170,7 @@ def create_app(
             grounded=None,
         )
 
-    @app.post("/query", response_model=QueryResponse)
+    @app.post("/api/query", response_model=QueryResponse)
     def query(request: QueryApiRequest) -> QueryResponse:
         effective_settings = _build_effective_settings(app_settings, request)
         retrieval_started_at = time.monotonic()
