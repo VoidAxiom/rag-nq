@@ -57,23 +57,6 @@ def test_load_multihop_dispatches_to_per_benchmark_stub(
     assert loader.expected_passage_count == expected_count
 
 
-@pytest.mark.parametrize(
-    ("benchmark", "expected_token"),
-    [
-        (MultihopBenchmark.MUSIQUE, "VOI-PENDING-P1-D"),
-    ],
-)
-def test_stub_iter_passages_raises_with_pending_token(
-    benchmark: MultihopBenchmark,
-    expected_token: str,
-) -> None:
-    loader = load_multihop(benchmark)
-
-    with pytest.raises(NotImplementedError) as exc_info:
-        next(loader.iter_passages())
-    assert expected_token in str(exc_info.value)
-
-
 def test_load_multihop_returns_loader_implementing_protocol() -> None:
     loader: MultihopLoader = load_multihop(MultihopBenchmark.HOTPOTQA)
 
