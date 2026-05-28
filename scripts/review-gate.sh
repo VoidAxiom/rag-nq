@@ -300,7 +300,14 @@ clean_comment_baseline=bool(base_ts) and any(
 if openn>0:
     print("EXIT|FINDINGS open=%d mss=%s ci=%s" % (openn,mss,ci))
     sys.exit()
-if review_on_head_clean and fresh>0 and ci!="pending":
+if review_on_head_clean and ci!="pending":
+    # review_on_head_clean is already a fresh-on-head signal: a new head push
+    # invalidates prior reviews (their commit.oid no longer matches headRefOid).
+    # So gating REVIEWED-CLEAN on `fresh>0` (comment-count growth since
+    # baseline) drops valid head-pinned 👍 verdicts that arrived as a Review
+    # without an additional top-level comment. Drop the fresh>0 requirement
+    # for the head-pinned-clean path; keep it for the clean_comment paths
+    # below where freshness is the load-bearing anchor.
     print("EXIT|REVIEWED-CLEAN review_on_head_clean=1 fresh=%d open=0 mss=%s ci=%s" % (fresh,mss,ci))
     sys.exit()
 if (clean_comment or clean_comment_baseline) and ci!="pending":
