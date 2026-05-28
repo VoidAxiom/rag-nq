@@ -281,8 +281,7 @@ This packet is not done when code merges. It's done when:
    completes and `artifacts/retrieval_eval_p0.json` contains
    `recall@10 > <previous-MiniLM-baseline-recall@10>` (we expect a
    measurable lift from MiniLM to Qwen3-4B).
-4. `cd app/web && npm run dev` (or `npm run build` + `RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn app.api.main:app`), browse `/scoreboard`,
-   and rows for the new baseline are visible.
+4. Either `cd app/web && npm run dev` (Vite dev path) OR `(cd app/web && npm install && npm run build) && RAG_WEB_DIST_PATH=app/web/dist uv run uvicorn app.api.main:app` (FastAPI-served path; the subshell keeps `uvicorn` at the repo root so `app.api.main` imports correctly and the `RAG_WEB_DIST_PATH` relative path resolves to `<repo>/app/web/dist`). Browse `/scoreboard` and rows for the new baseline are visible.
 
 **Packet allowlist (P0):**
 
