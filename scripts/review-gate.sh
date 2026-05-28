@@ -124,8 +124,8 @@ if clean:
     print("\nGATE: CLEAN (head-pinned no-issues Codex review on %s, 0 unresolved; mergeable once CI green)" % (head or "?")[:9])
 elif review_on_head and len(openn)>0:
     print("\nGATE: BLOCKED (mss=%s, %d unresolved threads)" % (mss, len(openn)))
-elif review_on_head and len(openn)==0 and not review_on_head_clean:
-    print("\nGATE: BLOCKED (head-pinned Codex review on %s carries findings; threads resolved on rationale alone but no fresh head-pinned 👍 verdict. Re-trigger `@codex review` and wait for a 👍 review, or fall through to CLEAN-COMMENT-MANUAL via a clean comment that post-dates the latest review request.)" % (head or "?")[:9])
+elif review_on_head and len(openn)==0 and not review_on_head_clean and not clean_comment:
+    print("\nGATE: BLOCKED (head-pinned Codex review on %s carries findings; threads resolved on rationale alone but no fresh head-pinned 👍 verdict AND no clean comment post-dating the latest @codex review request. Re-trigger `@codex review` and wait for either a head-pinned 👍 review OR a clean comment that post-dates the latest review request.)" % (head or "?")[:9])
 elif clean_comment and len(openn)==0 and mss=="CLEAN":
     print("\nGATE: CLEAN-COMMENT-MANUAL (NOT a verdict) — Codex posted a comment-only clean note, but GitHub exposes no signal tying it to head %s (no SHA in body, no head-pinned review, pushedDate null) and a stale in-flight review request can make the timestamps look plausible. This gate CANNOT validate it. Safe resolutions: (a) re-run `@codex review` for the current head and wait for a head-pinned review, or (b) the operator independently confirms, from this session, that this clean note answered an `@codex review` issued AFTER this exact head was pushed. Never auto-merge on this." % (head or "?")[:9])
 else:
