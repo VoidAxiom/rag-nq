@@ -365,9 +365,10 @@ each lift attributable.
   retriever conforming to the existing `Retriever` protocol.
 * Hybrid retriever extended: dense + sparse fusion → ColBERT-v2 rerank
   pass on the top-N → final top-K.
-* React `/trace` retrieval-trace visualization page: for a query, show
+* React `/retrieval-trace` visualization page: for a query, show
   overlap Venn (dense top-K vs sparse top-K vs ColBERT top-K), MaxSim
-  heatmap for the ColBERT pass.
+  heatmap for the ColBERT pass. (Distinct from §7's `/trace` which is
+  reserved for the P5 Search-o1 iterative-reasoning hops viewer.)
 * Scoreboard updated: hybrid+ColBERT rows added for NQ and all three
   multi-hop benchmarks. Expected modest lift on multi-hop recall (~5-10
   points).
@@ -388,7 +389,7 @@ showcase value.
    throughput logged.
 3. Eval re-run shows measurable lift on MuSiQue Recall@5 vs P1 vanilla
    (target: +5 points minimum).
-4. React `/trace` page renders the Venn + heatmap.
+4. React `/retrieval-trace` page renders the Venn + heatmap.
 
 **Packet allowlist (P2):**
 
@@ -396,7 +397,7 @@ showcase value.
 * `src/retrieval/qdrant_retrievers.py` (extension)
 * `src/scripts/index_colbert.py` (new)
 * `src/scripts/migrate_collections_add_multivector.py` (new)
-* `app/web/src/pages/TracePage.tsx` (new — retrieval-trace viz)
+* `app/web/src/pages/RetrievalTracePage.tsx` (new — retrieval-trace viz)
 * `tests/test_colbert_retriever.py` (new)
 * `pyproject.toml`, `uv.lock` (fastembed addition)
 
