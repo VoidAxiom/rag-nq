@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping, Sequence
 
 from src.ingestion.models import Passage
@@ -49,14 +50,33 @@ class TwoWikiMhqaLoader:
                         f"2WikiMHQA context[{para_idx}] must contain title and sentences."
                     )
 
-                title = paragraph[0]
+                # Why: Titles may be plain/JSON-quoted; string sentences must be JSON arrays.
+                raw_title = paragraph[0]
+                if isinstance(raw_title, str):
+                    try:
+                        decoded_title = json.loads(raw_title)
+                    except json.JSONDecodeError:
+                        decoded_title = raw_title
+                    title = decoded_title if isinstance(decoded_title, str) else raw_title
+                else:
+                    title = raw_title
                 if not isinstance(title, str):
                     raise TypeError(
                         f"2WikiMHQA context[{para_idx}][0] must be a string."
                     )
 
+                raw_sentences = paragraph[1]
+                if isinstance(raw_sentences, str):
+                    try:
+                        sentences_raw = json.loads(raw_sentences)
+                    except json.JSONDecodeError as exc:
+                        raise TypeError(
+                            f"2WikiMHQA context[{para_idx}][1] is not valid JSON: {exc}"
+                        ) from exc
+                else:
+                    sentences_raw = raw_sentences
                 sentences = _require_string_sequence(
-                    paragraph[1],
+                    sentences_raw,
                     f"context[{para_idx}][1]",
                 )
                 text = " ".join(sentences).strip()
