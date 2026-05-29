@@ -61,16 +61,6 @@ interface PipelineUiState {
   bridge1: BridgeState
   totalState: 'idle' | 'running' | 'complete'
   totalMs: number | null
-  // Snapshot of components selected when the in-flight query started.
-  // Used to label the running step rows even if the user changes a knob
-  // mid-flight; the displayed model name belongs to the active query.
-  inFlightComponents: {
-    mode: RetrievalMode
-    topK: number
-    reranker: string
-    generator: string
-    collection: string
-  } | null
 }
 
 const INITIAL_PIPELINE_STATE: PipelineUiState = {
@@ -84,7 +74,6 @@ const INITIAL_PIPELINE_STATE: PipelineUiState = {
   bridge1: 'idle',
   totalState: 'idle',
   totalMs: null,
-  inFlightComponents: null,
 }
 
 export function AskPage() {
@@ -244,13 +233,6 @@ function AskPageContent({
         ...INITIAL_PIPELINE_STATE,
         totalState: 'running',
         totalMs: 0,
-        inFlightComponents: {
-          mode: searchState.mode,
-          topK: searchState.topK,
-          reranker: searchState.reranker,
-          generator: searchState.generator,
-          collection: searchState.collection,
-        },
       })
 
       // Real timings arrive when the mutation resolves; we expose them via a
