@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,9 @@ from pydantic import TypeAdapter
 from app.api.schemas import EvalQuestion
 from src.config.settings import Settings
 from src.ingestion.models import IndexChunk
+from src.ingestion.musique_loader import MuSiQueGoldQuestion, MuSiQueLoader
 from src.scripts.curate_eval_questions import curate
+from src.scripts.ingest_multihop import _multihop_point_id
 
 
 def test_curate_nq_from_index_chunks_is_deterministic(tmp_path: Path) -> None:
@@ -42,6 +45,78 @@ def test_curate_rejects_empty_collection_benchmarks(
 ) -> None:
     with pytest.raises(ValueError, match="empty by design"):
         curate(benchmark, sample_size=1, seed=0, output_dir=tmp_path / "artifacts")
+
+
+def test_curate_musique_writes_well_formed_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "artifacts"
+    gold_questions = _musique_gold_questions()
+    _patch_musique_gold_questions(monkeypatch, gold_questions)
+
+    questions = curate("musique", sample_size=10, seed=0, output_dir=output_dir)
+
+    assert len(questions) >= 1
+    assert all(question.query for question in questions)
+    assert all(question.gold_answers for question in questions)
+    supporting_ids_by_query = {
+        gold.question: [
+            _multihop_point_id(passage_id)
+            for passage_id in gold.supporting_passage_ids
+        ]
+        for gold in gold_questions
+    }
+    assert all(
+        question.supporting_passage_ids == supporting_ids_by_query[question.query]
+        for question in questions
+    )
+    written = TypeAdapter(list[EvalQuestion]).validate_json(
+        (output_dir / "eval_questions" / "musique.json").read_bytes()
+    )
+    assert written == questions
+
+
+def test_curate_musique_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "artifacts"
+    _patch_musique_gold_questions(monkeypatch, _musique_gold_questions())
+    output_path = output_dir / "eval_questions" / "musique.json"
+
+    first = curate("musique", sample_size=10, seed=7, output_dir=output_dir)
+    first_bytes = output_path.read_bytes()
+    second = curate("musique", sample_size=10, seed=7, output_dir=output_dir)
+    second_bytes = output_path.read_bytes()
+
+    assert first == second
+    assert first_bytes == second_bytes
+
+
+def test_curate_musique_supporting_passage_ids_are_index_point_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "artifacts"
+    canonical_ids = ("musique-row-alpha-0", "musique-row-alpha-1")
+    _patch_musique_gold_questions(
+        monkeypatch,
+        [
+            MuSiQueGoldQuestion(
+                row_id="row-alpha",
+                question="Who designed the Analytical Engine?",
+                gold_answers=("Ada Lovelace",),
+                supporting_passage_ids=canonical_ids,
+            )
+        ],
+    )
+
+    questions = curate("musique", sample_size=1, seed=0, output_dir=output_dir)
+
+    assert len(questions) == 1
+    question = questions[0]
+    assert question.supporting_passage_ids == [
+        _multihop_point_id(passage_id) for passage_id in canonical_ids
+    ]
+    assert question.supporting_passage_ids != list(canonical_ids)
 
 
 def _write_index_chunks(path: Path) -> None:
@@ -112,3 +187,37 @@ def _write_index_chunks(path: Path) -> None:
 def _stable_query_id(benchmark: str, query: str) -> str:
     digest = hashlib.sha1(query.encode("utf-8")).hexdigest()[:12]
     return f"{benchmark}-{digest}"
+
+
+def _patch_musique_gold_questions(
+    monkeypatch: pytest.MonkeyPatch, gold_questions: list[MuSiQueGoldQuestion]
+) -> None:
+    def fake_iter_gold_questions(
+        _self: MuSiQueLoader,
+    ) -> Iterator[MuSiQueGoldQuestion]:
+        return iter(gold_questions)
+
+    monkeypatch.setattr(MuSiQueLoader, "iter_gold_questions", fake_iter_gold_questions)
+
+
+def _musique_gold_questions() -> list[MuSiQueGoldQuestion]:
+    return [
+        MuSiQueGoldQuestion(
+            row_id="row-alpha",
+            question="Who designed the Analytical Engine?",
+            gold_answers=("Ada Lovelace", "Augusta Ada King"),
+            supporting_passage_ids=("musique-row-alpha-0", "musique-row-alpha-1"),
+        ),
+        MuSiQueGoldQuestion(
+            row_id="row-beta",
+            question="What is the closest planet to the Sun?",
+            gold_answers=("Mercury",),
+            supporting_passage_ids=("musique-row-beta-0",),
+        ),
+        MuSiQueGoldQuestion(
+            row_id="row-gamma",
+            question="Which city is France's capital?",
+            gold_answers=("Paris",),
+            supporting_passage_ids=("musique-row-gamma-3", "musique-row-gamma-4"),
+        ),
+    ]
