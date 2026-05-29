@@ -384,9 +384,12 @@ def create_app(
                     run_id=run_id,
                     progress_cb=lambda n: registry.mark_progress(run_id, n),
                 )
-                scoreboard_module.add_row(
-                    result.row, app_settings.output_dir / "scoreboard.json"
+                scoreboard_path = (
+                    scoreboard_path_factory()
+                    if scoreboard_path_factory
+                    else SCOREBOARD_PATH
                 )
+                scoreboard_module.add_row(result.row, scoreboard_path)
                 registry.mark_done(run_id)
             except Exception as exc:  # noqa: BLE001 -- caught and surfaced via registry
                 LOGGER.exception("suite run failed run_id=%s", run_id)

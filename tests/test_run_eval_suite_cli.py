@@ -37,9 +37,14 @@ def test_cli_runs_suite_by_id_and_writes_scoreboard_row(
     capsys,
 ) -> None:
     output_dir = tmp_path / "artifacts"
+    temp_scoreboard = tmp_path / "scoreboard.json"
     _write_eval_question(output_dir)
     suite = _suite("suite-1", name="NQ Smoke Suite")
     eval_suite.save_suite(suite, output_dir / "eval_suites")
+    monkeypatch.setattr(run_eval_suite, "SCOREBOARD_PATH", temp_scoreboard)
+    monkeypatch.setattr(
+        "src.evaluation.scoreboard.SCOREBOARD_PATH", temp_scoreboard
+    )
     monkeypatch.setattr(
         run_eval_suite,
         "_default_retriever_factory",
@@ -60,7 +65,7 @@ def test_cli_runs_suite_by_id_and_writes_scoreboard_row(
     stdout = capsys.readouterr().out
     assert "Suite: NQ Smoke Suite (suite-1)" in stdout
     assert "Wrote scoreboard row id=run-1 launched_via=cli" in stdout
-    scoreboard = load_scoreboard(output_dir / "scoreboard.json")
+    scoreboard = load_scoreboard(temp_scoreboard)
     assert len(scoreboard.rows) == 1
     row = scoreboard.rows[0]
     assert row.suite_id == "suite-1"
@@ -72,9 +77,14 @@ def test_cli_runs_suite_by_id_and_writes_scoreboard_row(
 
 def test_cli_resolves_suite_by_unique_name(tmp_path: Path, monkeypatch) -> None:
     output_dir = tmp_path / "artifacts"
+    temp_scoreboard = tmp_path / "scoreboard.json"
     _write_eval_question(output_dir)
     eval_suite.save_suite(
         _suite("suite-1", name="NQ Smoke Suite"), output_dir / "eval_suites"
+    )
+    monkeypatch.setattr(run_eval_suite, "SCOREBOARD_PATH", temp_scoreboard)
+    monkeypatch.setattr(
+        "src.evaluation.scoreboard.SCOREBOARD_PATH", temp_scoreboard
     )
     monkeypatch.setattr(
         run_eval_suite,
@@ -92,7 +102,7 @@ def test_cli_resolves_suite_by_unique_name(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert exit_code == 0
-    assert len(load_scoreboard(output_dir / "scoreboard.json").rows) == 1
+    assert len(load_scoreboard(temp_scoreboard).rows) == 1
 
 
 def test_cli_returns_one_for_missing_or_ambiguous_suite(tmp_path: Path, capsys) -> None:

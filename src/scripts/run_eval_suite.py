@@ -12,7 +12,7 @@ from app.api.main import _default_generator_factory, _default_retriever_factory
 from src.config.settings import Settings
 from src.evaluation import eval_suite as suites_mod
 from src.evaluation.eval_suite_runner import EvalSuiteRunResult, run_suite
-from src.evaluation.scoreboard import add_row
+from src.evaluation.scoreboard import SCOREBOARD_PATH, add_row
 
 
 def _resolve_suite(
@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    add_row(result.row, settings.output_dir / "scoreboard.json")
+    add_row(result.row, SCOREBOARD_PATH)
     _print_summary(result, suite, run_id)
     return 0
 

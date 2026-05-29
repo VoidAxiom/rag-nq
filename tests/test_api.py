@@ -1064,6 +1064,7 @@ def test_suite_run_endpoint_launches_background_run_and_writes_scoreboard(
     from src.evaluation.scoreboard import load_scoreboard
 
     settings = Settings(output_dir=tmp_path / "artifacts")
+    scoreboard_path = tmp_path / "scoreboard.json"
     eval_questions_dir = settings.output_dir / "eval_questions"
     eval_questions_dir.mkdir(parents=True)
     (eval_questions_dir / "nq.json").write_text(
@@ -1111,6 +1112,7 @@ def test_suite_run_endpoint_launches_background_run_and_writes_scoreboard(
         settings=settings,
         retriever_factory=lambda settings, mode: FakeRetriever(mode=mode),
         generator_factory=lambda settings: FakeGenerator(),
+        scoreboard_path_factory=lambda: scoreboard_path,
         run_registry=registry,
     )
     client = TestClient(app)
@@ -1135,7 +1137,7 @@ def test_suite_run_endpoint_launches_background_run_and_writes_scoreboard(
     assert status_payload is not None
     assert status_payload["status"] == "done"
     assert status_payload["completed"] == 1
-    scoreboard = load_scoreboard(settings.output_dir / "scoreboard.json")
+    scoreboard = load_scoreboard(scoreboard_path)
     assert len(scoreboard.rows) == 1
     row = scoreboard.rows[0]
     assert row.suite_id == "suite-1"
