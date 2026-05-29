@@ -321,24 +321,22 @@ production code (anything outside Claude's exclusive territory:
 `.gitignore`, plus `scripts/**` and tests) as a `PreToolUse` deny —
 enforced, not advisory.
 
-Per packet, Claude spawns an `implementer` subagent (Task tool,
-`subagent_type: implementer`) that runs in its own filesystem worktree. The
-implementer's tools list omits `Edit`/`Write`/`MultiEdit`; it dispatches
-`codex exec` workers via `scripts/codex-run.sh worker <run-id> <task-file>`
-to produce code changes. **Codex is the only writer of production code.** The
-implementer also runs local gates, drives the `/code-review` loop until
-clean, commits within the packet allowlist, pushes, opens the PR, and drives
-the `@codex review` eye-emoji loop including thread resolution. See
-`.claude/agents/implementer.md` for the full Impl Contract.
+Per packet, Claude spawns one of two implementer subagents (Task tool) based on the packet's surface:
+
+- **`implementer`** (`subagent_type: implementer`) — for **backend, Python, infra, scripts, tests, anything outside `app/web/**`**. Its tools list omits `Edit`/`Write`/`MultiEdit`; it dispatches `codex exec` workers via `scripts/codex-run.sh worker <run-id> <task-file>` to produce code changes. **Codex is the only writer for backend code.** See `.claude/agents/implementer.md`.
+
+- **`ui-implementer`** (`subagent_type: ui-implementer`) — for **frontend, `app/web/**` only**. Writes code directly with `Edit`/`Write`/`MultiEdit` (no codex-exec). Additionally validates the rendered surface in a real browser via chrome-devtools / Playwright before notify-done. See `.claude/agents/ui-implementer.md`.
+
+The two share the rest of the contract: each runs in its own filesystem worktree off `origin/main`; runs local gates; drives the `/code-review` loop until clean; commits within the packet allowlist; pushes; opens the PR with `Closes VOI-N`; drives the `@codex review` eye-emoji loop including thread resolution; notifies Claude on REVIEWED-CLEAN or CLEAN-COMMENT-MANUAL.
+
+**Picking the right one.** If the packet allowlist touches anything under `app/web/**` AND only `app/web/**`, use `ui-implementer`. If it touches backend (`app/api/**`, `src/**`, etc.) OR mixes backend + frontend, use `implementer`. If you genuinely need both, decompose the packet into a frontend slice + a backend slice and dispatch one impl of each type in parallel (their worktrees are disjoint, their PRs sequence at merge time).
 
 Claude's serial time is:
 1. Authoring the spec for each packet (including the per-packet allowlist).
 2. Provisioning the impl worktree (`scripts/worktree-new.sh`).
-3. Dispatching the implementer subagent.
-4. Running the **pre-PR mechanical scope check** and the **codex-exec
-   audit-trail check** on the impl's committed diff before they push.
-5. Running the **final-head re-gate** at merge time (the same checks against
-   the FINAL PR head, after the eye-emoji loop).
+3. Dispatching the appropriate implementer subagent (`implementer` for backend, `ui-implementer` for frontend `app/web/**`).
+4. Running the **pre-PR mechanical scope check** on the impl's committed diff before they push — plus the **codex-exec audit-trail check** when the impl was the codex `implementer` (the `ui-implementer` writes directly; its audit trail is the git history, not `.codex-runs/`).
+5. Running the **final-head re-gate** at merge time (the same checks against the FINAL PR head, after the eye-emoji loop).
 6. The squash-merge + worktree teardown + `.codex-runs/` GC.
 
 Domain correctness, taste, and architecture are Claude-owned and never
