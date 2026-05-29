@@ -71,9 +71,23 @@ export function runPipelineAnimation(opts: SchedulerOptions): Promise<void> {
     const start = now()
 
     let timings: StepTimings | null = null
+    let totalSnapped = false
     const realPromise = opts.realTimings.then(
       (resolved) => {
         timings = resolved
+        // If all three steps already completed on the wall-clock placeholder
+        // path (slow one-shot API case), the resolve-time total snap inside
+        // startStep(STEPS.length) ran with timings === null and so was a
+        // no-op. Emit a corrective onTotalMs here so the Total card snaps to
+        // the real summed total. Idempotent guard via totalSnapped: when the
+        // resolve-time snap fires first, it sets totalSnapped to short-circuit
+        // this branch.
+        if (!totalSnapped) {
+          totalSnapped = true
+          opts.callbacks.onTotalMs(
+            Math.round(resolved.retriever + resolved.reranker + resolved.generator),
+          )
+        }
         return resolved
       },
       (err) => {
@@ -104,8 +118,11 @@ export function runPipelineAnimation(opts: SchedulerOptions): Promise<void> {
       if (cancelled) return
       if (idx >= STEPS.length) {
         cleanup()
-        // Final snap: render the real total if known.
-        if (timings !== null) {
+        // Final snap: render the real total if known. If not, the late-
+        // arrival realPromise handler above will fire it once /api/query
+        // resolves.
+        if (timings !== null && !totalSnapped) {
+          totalSnapped = true
           opts.callbacks.onTotalMs(
             Math.round(timings.retriever + timings.reranker + timings.generator),
           )

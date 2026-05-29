@@ -279,6 +279,11 @@ describe('runPipelineAnimation', () => {
     expect(lastByStep.get('retriever')).toBe(50)
     expect(lastByStep.get('reranker')).toBe(40)
     expect(lastByStep.get('generator')).toBe(30)
+    // The Total card must also snap to the real summed total (regression
+    // for the 'late realPromise never updates Total' bug codex flagged on
+    // round 4): the resolve-time snap inside startStep ran while timings
+    // were null, so a corrective onTotalMs must fire when realPromise lands.
+    expect(events.totalMs[events.totalMs.length - 1]).toBe(120)
   })
 
   it('rejects if real timings reject', async () => {
