@@ -14,8 +14,7 @@ from pydantic import TypeAdapter
 from app.api.schemas import EvalQuestion
 from src.config.settings import Settings
 from src.evaluation.retrieval_eval import EvalCase, build_eval_cases_from_index_artifact
-from src.ingestion.multihop_loader import MultihopBenchmark
-from src.ingestion.passage_store import PassageStore
+from src.ingestion.musique_loader import MuSiQueLoader
 
 CuratableBenchmark = Literal["nq", "musique"]
 
@@ -39,8 +38,11 @@ def curate(
     resolved_output_dir = (
         output_dir if output_dir is not None else Settings.from_env().output_dir
     )
-    index_path = _index_artifact_path(resolved_benchmark, resolved_output_dir)
-    cases = build_eval_cases_from_index_artifact(index_path, max_queries=None)
+    if resolved_benchmark == "nq":
+        index_path = _index_artifact_path(resolved_benchmark, resolved_output_dir)
+        cases = build_eval_cases_from_index_artifact(index_path, max_queries=None)
+    else:
+        cases = _build_musique_cases()
     sampled_cases = _sample_cases(cases, sample_size=sample_size, seed=seed)
     questions = [
         _eval_question_from_case(resolved_benchmark, case)
@@ -117,10 +119,22 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _index_artifact_path(benchmark: CuratableBenchmark, output_dir: Path) -> Path:
-    if benchmark == "nq":
-        return Settings(output_dir=output_dir).index_chunks_path
-    return PassageStore.multihop_jsonl_path(MultihopBenchmark.MUSIQUE, output_dir)
+def _index_artifact_path(_benchmark: Literal["nq"], output_dir: Path) -> Path:
+    return Settings(output_dir=output_dir).index_chunks_path
+
+
+def _build_musique_cases() -> list[EvalCase]:
+    loader = MuSiQueLoader()
+    cases: list[EvalCase] = []
+    for gold in loader.iter_gold_questions():
+        cases.append(
+            EvalCase(
+                query=gold.question,
+                answer_texts=list(gold.gold_answers),
+                relevant_passage_ids=list(gold.supporting_passage_ids),
+            )
+        )
+    return cases
 
 
 def _sample_cases(cases: list[EvalCase], *, sample_size: int, seed: int) -> list[EvalCase]:
