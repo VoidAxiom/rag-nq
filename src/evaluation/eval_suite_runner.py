@@ -179,6 +179,16 @@ def run_suite(
         else None
     )
     pipeline = _pipeline_label(suite.config.mode, suite.config.reranker)
+    reranker_actually_ran = (
+        suite.config.mode == "hybrid" and suite.config.reranker != "off"
+    )
+    reranker_label = suite.config.reranker if reranker_actually_ran else "off"
+    if suite.config.generator in ("heuristic", "off"):
+        reasoning_llm_label: str | None = None
+    else:
+        reasoning_llm_label = (
+            effective_settings.generation_model_name or suite.config.generator
+        )
     row = ScoreboardRow(
         phase="suite",
         pipeline=pipeline,
@@ -193,8 +203,8 @@ def run_suite(
         latency_ms=latency_percentiles_ms(latencies_ms),
         models=ModelSet(
             embedder=app_settings.embedder_name,
-            reranker=suite.config.reranker,
-            reasoning_llm=None,
+            reranker=reranker_label,
+            reasoning_llm=reasoning_llm_label,
             verifier=None,
         ),
         commit_sha=_resolve_commit_sha(commit_sha),

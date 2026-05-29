@@ -602,12 +602,129 @@ def test_pipeline_label_hybrid_with_reranker_is_hybrid_plus_rerank(
     assert result.row.pipeline == "hybrid+rerank"
 
 
+def test_models_reranker_dense_is_off_even_when_configured(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="dense", reranker="my-reranker"),
+    )
+
+    assert result.row.models.reranker == "off"
+
+
+def test_models_reranker_sparse_is_off_even_when_configured(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="sparse", reranker="my-reranker"),
+    )
+
+    assert result.row.models.reranker == "off"
+
+
+def test_models_reranker_hybrid_off_is_off(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="hybrid", reranker="off"),
+    )
+
+    assert result.row.models.reranker == "off"
+
+
+def test_models_reranker_hybrid_on_reflects_config(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="hybrid", reranker="my-reranker"),
+    )
+
+    assert result.row.models.reranker == "my-reranker"
+
+
+def test_models_reasoning_llm_heuristic_is_none(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(generator="heuristic"),
+    )
+
+    assert result.row.models.reasoning_llm is None
+
+
+def test_models_reasoning_llm_generator_off_is_none(tmp_path: Path) -> None:
+    settings = Settings(
+        output_dir=tmp_path / "artifacts",
+        embedder_name="embedder-test",
+        generation_model_name="some-label",
+    )
+
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="dense", reranker="off", generator="off"),
+        settings=settings,
+    )
+
+    assert result.row.models.reasoning_llm is None
+
+
+def test_models_reasoning_llm_openai_uses_generation_model_name(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        output_dir=tmp_path / "artifacts",
+        embedder_name="embedder-test",
+        generation_model_name="gpt-4o-mini",
+    )
+
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(generator="openai"),
+        settings=settings,
+    )
+
+    assert result.row.models.reasoning_llm == "gpt-4o-mini"
+
+
+def test_models_reasoning_llm_openai_falls_back_to_provider_when_model_name_empty(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        output_dir=tmp_path / "artifacts",
+        embedder_name="embedder-test",
+        generation_model_name="",
+    )
+
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(generator="openai"),
+        settings=settings,
+    )
+
+    assert result.row.models.reasoning_llm == "openai"
+
+
+def test_models_reasoning_llm_http_json_uses_generation_model_name(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        output_dir=tmp_path / "artifacts",
+        embedder_name="embedder-test",
+        generation_model_name="some-model",
+    )
+
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(generator="http_json"),
+        settings=settings,
+    )
+
+    assert result.row.models.reasoning_llm == "some-model"
+
+
 def _run_single_entry_suite(
     tmp_path: Path,
     *,
     config: SuiteConfig,
+    settings: Settings | None = None,
 ) -> EvalSuiteRunResult:
-    settings = Settings(output_dir=tmp_path / "artifacts")
+    if settings is None:
+        settings = Settings(output_dir=tmp_path / "artifacts")
     eval_questions_dir = settings.output_dir / "eval_questions"
     eval_questions_dir.mkdir(parents=True)
     (eval_questions_dir / "nq.json").write_text(
