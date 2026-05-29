@@ -264,7 +264,9 @@ describe('runPipelineAnimation', () => {
     ])
 
     // Now resolve realTimings with values smaller than the wall-clock; the
-    // promise should still resolve cleanly.
+    // promise should still resolve cleanly AND each step's final displayed
+    // ms must snap to the real per-step value (regression for the 'late real
+    // timings never replace placeholders' bug codex flagged on round 3).
     resolveReal({ retriever: 50, reranker: 40, generator: 30 })
     for (let t = MIN_STEP_MS * 4; t <= MIN_STEP_MS * 6; t += 50) {
       clock.advanceTo(t)
@@ -272,6 +274,11 @@ describe('runPipelineAnimation', () => {
       await Promise.resolve()
     }
     await done
+    const lastByStep = new Map<StepId, number>()
+    for (const e of events.stepMs) lastByStep.set(e.step, e.ms)
+    expect(lastByStep.get('retriever')).toBe(50)
+    expect(lastByStep.get('reranker')).toBe(40)
+    expect(lastByStep.get('generator')).toBe(30)
   })
 
   it('rejects if real timings reject', async () => {

@@ -205,8 +205,15 @@ export function runPipelineAnimation(opts: SchedulerOptions): Promise<void> {
 
           realPromise.then(
             (resolved) => {
-              if (settled || cancelled) return
               const realMs = resolved[currentStep]
+              if (cancelled) return
+              if (settled) {
+                // The step already settled with a wall-clock placeholder while
+                // the API was still in flight. Emit a corrective onStepMs so
+                // the displayed ms snaps to the real per-step truth.
+                opts.callbacks.onStepMs(currentStep, Math.round(realMs))
+                return
+              }
               const elapsed = now() - stepStart
               const remaining = Math.max(0, realMs - elapsed, MIN_STEP_MS - elapsed)
               if (remaining === 0) {
