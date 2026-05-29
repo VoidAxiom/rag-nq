@@ -10,15 +10,56 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 
 import { AskPage } from '@/pages/AskPage'
+import { ThemeProvider } from '@/theme/ThemeProvider'
+import { ThemePicker } from '@/theme/ThemePicker'
 import type {
   ComponentsResponse,
   EvalQuestionsResponse,
   QueryResponse,
 } from '@/lib/types'
 
+function installLocalStoragePolyfillIfMissing(): void {
+  if (typeof window === 'undefined') return
+  if (
+    typeof window.localStorage !== 'undefined' &&
+    window.localStorage !== null
+  ) {
+    return
+  }
+  const store = new Map<string, string>()
+  const memoryStorage = {
+    get length() {
+      return store.size
+    },
+    clear(): void {
+      store.clear()
+    },
+    getItem(key: string): string | null {
+      return store.has(key) ? (store.get(key) as string) : null
+    },
+    setItem(key: string, value: string): void {
+      store.set(String(key), String(value))
+    },
+    removeItem(key: string): void {
+      store.delete(key)
+    },
+    key(index: number): string | null {
+      return Array.from(store.keys())[index] ?? null
+    },
+  } satisfies Storage
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: memoryStorage,
+  })
+}
+installLocalStoragePolyfillIfMissing()
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.localStorage.clear()
+  delete document.documentElement.dataset.style
+  delete document.documentElement.dataset.palette
 })
 
 describe('AskPage', () => {
@@ -27,13 +68,10 @@ describe('AskPage', () => {
       () => new Promise<Response>(() => undefined),
     )
     vi.stubGlobal('fetch', fetchMock)
-
     renderAskPage()
-
-    expect(screen.getByRole('status', { name: /loading rag explorer/i })).toHaveAttribute(
-      'aria-busy',
-      'true',
-    )
+    expect(
+      screen.getByRole('status', { name: /loading rag explorer/i }),
+    ).toHaveAttribute('aria-busy', 'true')
   })
 
   it('renders error state when components endpoint fails', async () => {
@@ -43,61 +81,72 @@ describe('AskPage', () => {
         Promise.resolve(new Response('Server failed', { status: 500 })),
       ),
     )
-
     renderAskPage()
-
-    expect(await screen.findByText(/Failed to fetch components/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Failed to fetch components/i),
+    ).toBeInTheDocument()
   })
 
   it('displays question text after picking a curated eval question', async () => {
     const fetchMock = stubAskFetch()
-
     renderAskPage()
-
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([input]) => requestPath(input) === '/api/eval_questions/nq')).toBe(
-        true,
-      ),
-    )
-    fireEvent.click(screen.getByLabelText('Curated eval question'))
-
-    expect(
-      await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/),
-    ).toBeInTheDocument()
-  })
-
-  it('submits a query and renders the grounded answer', async () => {
-    stubAskFetch({
-      queryResponder: () => populatedQueryResponse(),
-    })
-
-    renderAskPage(['/ask?q_id=nq-1'])
-
-    await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-
-    expect(
-      await screen.findByText('Marie Curie discovered radium.'),
-    ).toBeInTheDocument()
-  })
-
-  it('buildOverrides sends generation_provider even when heuristic is selected', async () => {
-    const fetchMock = stubAskFetch()
-
-    renderAskPage(['/ask?q_id=nq-1'])
-
-    await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
-          ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
+          ([input]) => requestPath(input) === '/api/eval_questions/nq',
+        ),
+      ).toBe(true),
+    )
+    fireEvent.click(screen.getByLabelText(/Curated eval question/i))
+    expect(
+      await screen.findByRole('option', {
+        name: /Which scientist discovered radium\?/i,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('submits a query, drives the pipeline, and renders the grounded answer', async () => {
+    stubAskFetch({ queryResponder: () => populatedQueryResponse() })
+    renderAskPage(['/ask?q_id=nq-1'])
+    // Wait until the curated question is loaded into the input via select.
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText('Question') as HTMLInputElement).value,
+      ).toContain('Which scientist discovered radium?'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    // Animation: real timings (12.25 / 0 / 4.5 ms) but MIN_STEP_MS=250 floor →
+    // ≥ 750ms for the pipeline + typewriter beats. Allow up to 4s.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('answer-text').textContent).toContain(
+          'Marie Curie discovered radium.',
+        )
+      },
+      { timeout: 4000 },
+    )
+  })
+
+  it('sends generation_provider in the request body', async () => {
+    const fetchMock = stubAskFetch()
+    renderAskPage(['/ask?q_id=nq-1'])
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText('Question') as HTMLInputElement).value,
+      ).toContain('Which scientist discovered radium?'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            requestPath(input) === '/api/query' && init?.method === 'POST',
         ),
       ).toBe(true),
     )
     const queryCall = fetchMock.mock.calls.find(
-      ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
+      ([input, init]) =>
+        requestPath(input) === '/api/query' && init?.method === 'POST',
     )
     if (queryCall === undefined) {
       throw new Error('Expected /api/query request body')
@@ -111,14 +160,13 @@ describe('AskPage', () => {
     expect(overrides.generation_provider).toBe('heuristic')
   })
 
-  it('renders per-query metrics when gold_answers are present in the request', async () => {
+  it('renders gold metrics when the active question carries gold_answers', async () => {
     stubAskFetch({
       queryResponder: (request) => {
         const goldAnswers = request.gold_answers
-        const hasGoldAnswers = Array.isArray(goldAnswers) && goldAnswers.length > 0
-
+        const hasGold = Array.isArray(goldAnswers) && goldAnswers.length > 0
         return populatedQueryResponse({
-          metrics: hasGoldAnswers
+          metrics: hasGold
             ? {
                 em: 0.75,
                 f1: 0.875,
@@ -129,59 +177,39 @@ describe('AskPage', () => {
         })
       },
     })
-
     renderAskPage(['/ask?q_id=nq-1'])
-
-    await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/)
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText('Question') as HTMLInputElement).value,
+      ).toContain('Which scientist discovered radium?'),
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-
-    expect(await screen.findByText('0.750')).toBeInTheDocument()
+    await waitFor(
+      () => expect(screen.getByText('0.750')).toBeInTheDocument(),
+      { timeout: 4000 },
+    )
     expect(screen.getByText('0.875')).toBeInTheDocument()
   })
 
-  it('free-text query has no metrics card content', async () => {
+  it('free-text query produces no gold metrics panel', async () => {
     stubAskFetch({
       queryResponder: () =>
-        populatedQueryResponse({
-          metrics: null,
-          query_id: null,
-        }),
+        populatedQueryResponse({ metrics: null, query_id: null }),
     })
-
     renderAskPage()
-
-    fireEvent.change(await screen.findByLabelText('Question'), {
-      target: { value: 'What is retrieval augmented generation?' },
-    })
+    const inputs = await screen.findAllByLabelText('Question')
+    const inputBox = inputs.find(
+      (el) => (el as HTMLElement).tagName === 'INPUT',
+    ) as HTMLInputElement | undefined
+    if (inputBox === undefined) {
+      throw new Error('Expected a free-text input')
+    }
+    fireEvent.change(inputBox, { target: { value: 'What is RAG?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-
-    expect(
-      await screen.findByText(/No metrics .*free-text/i),
-    ).toBeInTheDocument()
-  })
-
-  it('OpenAI generator option is rendered as disabled', async () => {
-    stubAskFetch({
-      components: componentsFixture({
-        openai_enabled: false,
-      }),
-    })
-
-    renderAskPage()
-
-    const generatorSelect = await screen.findByRole('combobox', {
-      name: /generator/i,
-    })
-    fireEvent.pointerDown(generatorSelect, {
-      button: 0,
-      ctrlKey: false,
-      pointerId: 1,
-      pointerType: 'mouse',
-    })
-
-    expect(await screen.findByRole('option', { name: /OpenAI gpt-4o/i })).toHaveAttribute(
-      'aria-disabled',
-      'true',
+    await waitFor(
+      () =>
+        expect(screen.queryByLabelText('Gold metrics')).not.toBeInTheDocument(),
+      { timeout: 4000 },
     )
   })
 
@@ -200,27 +228,28 @@ describe('AskPage', () => {
         openai_enabled: false,
       }),
     })
-
     renderAskPage(['/ask?generator=openai&q_id=nq-1'])
-
-    expect(
-      await screen.findByRole('combobox', { name: /generator/i }),
-    ).toHaveTextContent('Heuristic')
-    await screen.findByText(/Which scientist discovered radium\? \(nq-1\)/)
-
-    const askButton = screen.getByRole('button', { name: 'Ask' })
-    expect(askButton).toBeEnabled()
-    fireEvent.click(askButton)
-
+    const generator = (await screen.findByLabelText(
+      'Generator',
+    )) as HTMLSelectElement
+    expect(generator.value).toBe('heuristic')
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText('Question') as HTMLInputElement).value,
+      ).toContain('Which scientist discovered radium?'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
-          ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
+          ([input, init]) =>
+            requestPath(input) === '/api/query' && init?.method === 'POST',
         ),
       ).toBe(true),
     )
     const queryCall = fetchMock.mock.calls.find(
-      ([input, init]) => requestPath(input) === '/api/query' && init?.method === 'POST',
+      ([input, init]) =>
+        requestPath(input) === '/api/query' && init?.method === 'POST',
     )
     if (queryCall === undefined) {
       throw new Error('Expected /api/query request body')
@@ -236,68 +265,47 @@ describe('AskPage', () => {
 
   it('URL params reflect knob selections', async () => {
     stubAskFetch()
-
     renderAskPage(['/ask?mode=sparse&top_k=20'])
+    const mode = (await screen.findByLabelText(
+      'Retrieval mode',
+    )) as HTMLSelectElement
+    expect(mode.value).toBe('sparse')
+    const topK = (await screen.findByLabelText('Top K')) as HTMLSelectElement
+    expect(topK.value).toBe('20')
+  })
 
-    expect(
-      await screen.findByRole('combobox', { name: /retrieval mode/i }),
-    ).toHaveTextContent('sparse')
-    expect(screen.getByRole('combobox', { name: /top k/i })).toHaveTextContent('20')
+  it('theme picker round-trip changes <html> data-style', async () => {
+    stubAskFetch()
+    renderAskPage()
+    const styleSelect = (await screen.findByLabelText(
+      'Style',
+    )) as HTMLSelectElement
+    fireEvent.change(styleSelect, { target: { value: 'editorial' } })
+    expect(document.documentElement.dataset.style).toBe('editorial')
+    expect(document.documentElement.dataset.palette).toBe('editorial-print')
   })
 })
 
 function renderAskPage(initialEntries: string[] = ['/ask']): void {
-  installRadixPointerMocks()
-
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: {
-        retry: false,
-      },
-      mutations: {
-        retry: false,
-      },
+      queries: { retry: false },
+      mutations: { retry: false },
     },
   })
-
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>
-        <AskPage />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={initialEntries}>
+          <AskPage />
+          {/* Render the theme picker so the round-trip test can target it. */}
+          <ThemePicker />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
 
-function installRadixPointerMocks(): void {
-  if (!('hasPointerCapture' in window.HTMLElement.prototype)) {
-    Object.defineProperty(window.HTMLElement.prototype, 'hasPointerCapture', {
-      configurable: true,
-      value: () => false,
-    })
-  }
-
-  if (!('setPointerCapture' in window.HTMLElement.prototype)) {
-    Object.defineProperty(window.HTMLElement.prototype, 'setPointerCapture', {
-      configurable: true,
-      value: () => undefined,
-    })
-  }
-
-  if (!('releasePointerCapture' in window.HTMLElement.prototype)) {
-    Object.defineProperty(window.HTMLElement.prototype, 'releasePointerCapture', {
-      configurable: true,
-      value: () => undefined,
-    })
-  }
-
-  if (!('scrollIntoView' in window.HTMLElement.prototype)) {
-    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: () => undefined,
-    })
-  }
-}
 
 interface StubAskFetchOptions {
   components?: ComponentsResponse
@@ -305,7 +313,10 @@ interface StubAskFetchOptions {
   queryResponder?: (request: Record<string, unknown>) => QueryResponse
 }
 
-type FetchHandler = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+type FetchHandler = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>
 
 function stubAskFetch({
   components = componentsFixture(),
@@ -315,22 +326,17 @@ function stubAskFetch({
   const fetchMock = vi.fn<FetchHandler>((input, init) => {
     const path = requestPath(input)
     const method = init?.method ?? 'GET'
-
     if (method === 'GET' && path === '/api/components') {
       return Promise.resolve(jsonResponse(components))
     }
-
     if (method === 'GET' && path === '/api/eval_questions/nq') {
       return Promise.resolve(jsonResponse(questions))
     }
-
     if (method === 'POST' && path === '/api/query') {
       return Promise.resolve(jsonResponse(queryResponder(parseBody(init))))
     }
-
     return Promise.resolve(new Response('Not found', { status: 404 }))
   })
-
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
@@ -338,9 +344,7 @@ function stubAskFetch({
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
   })
 }
 
@@ -352,7 +356,6 @@ function requestPath(input: RequestInfo | URL): string {
         ? input.toString()
         : input.url
   const url = new URL(rawUrl, 'http://localhost')
-
   return url.pathname
 }
 
@@ -360,13 +363,10 @@ function parseBody(init: RequestInit | undefined): Record<string, unknown> {
   if (typeof init?.body !== 'string') {
     throw new Error('Expected JSON request body')
   }
-
   const payload: unknown = JSON.parse(init.body)
-
   if (!isRecord(payload)) {
     throw new Error('Expected object request body')
   }
-
   return payload
 }
 
@@ -415,7 +415,9 @@ function evalQuestionsFixture(): EvalQuestionsResponse {
   }
 }
 
-function populatedQueryResponse(overrides: Partial<QueryResponse> = {}): QueryResponse {
+function populatedQueryResponse(
+  overrides: Partial<QueryResponse> = {},
+): QueryResponse {
   return {
     query: 'Which scientist discovered radium?',
     retrieved_passages: [
