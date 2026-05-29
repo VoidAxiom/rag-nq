@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from src.config.settings import Settings
 from src.evaluation.eval_suite import DatasetRef, EvalSuite, SuiteConfig, SuiteEntry
@@ -148,7 +149,7 @@ def test_run_suite_aggregates_retrieval_answer_latency_and_provenance(
     assert row.phase == "suite"
     assert row.pipeline == "hybrid+rerank"
     assert row.benchmark == "nq"
-    assert row.split == "dev"
+    assert row.split == "mixed"
     assert row.commit_sha == "abc123"
     assert row.suite_id == "suite-1"
     assert row.suite_name == "Suite One"
@@ -232,6 +233,148 @@ def test_run_suite_generator_off_omits_answer_metrics(tmp_path: Path) -> None:
     assert result.row.pipeline == "dense"
     assert result.row.answer_metrics is None
     assert generator.calls == []
+
+
+def test_run_suite_overlays_generator_onto_settings(tmp_path: Path) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p1"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        config=_config(generator="http_json"),
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever({"Question one?": ["p1"]})
+    generator = FakeGenerator({"Question one?": "Paris"})
+    captured: dict[str, Settings] = {}
+
+    def generator_factory(factory_settings: Settings) -> FakeGenerator:
+        captured["settings"] = factory_settings
+        return generator
+
+    run_suite(
+        suite,
+        app_settings=settings,
+        retriever_factory=lambda settings, mode: retriever,
+        generator_factory=generator_factory,
+        launched_via="cli",
+        run_id="run-1",
+        commit_sha="abc123",
+    )
+
+    assert captured["settings"].generation_provider == "http_json"
+
+
+def test_run_suite_split_is_dev_for_all_dataset_suite(tmp_path: Path) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p1"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever({"Question one?": ["p1"]})
+    generator = FakeGenerator({"Question one?": "Paris"})
+
+    result = run_suite(
+        suite,
+        app_settings=settings,
+        retriever_factory=lambda settings, mode: retriever,
+        generator_factory=lambda settings: generator,
+        launched_via="cli",
+        run_id="run-1",
+        commit_sha="abc123",
+    )
+
+    assert result.row.split == "dev"
+
+
+def test_run_suite_rejects_unknown_generator_via_pydantic_literal(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p1"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        config=_config(generator="definitely-not-a-real-provider"),
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever({"Question one?": ["p1"]})
+    generator = FakeGenerator({"Question one?": "Paris"})
+
+    with pytest.raises(ValidationError) as exc_info:
+        run_suite(
+            suite,
+            app_settings=settings,
+            retriever_factory=lambda settings, mode: retriever,
+            generator_factory=lambda settings: generator,
+            launched_via="cli",
+            run_id="run-1",
+            commit_sha="abc123",
+        )
+
+    assert "generation_provider" in str(exc_info.value).lower()
 
 
 def test_run_suite_rejects_empty_or_authored_only_suite(tmp_path: Path) -> None:

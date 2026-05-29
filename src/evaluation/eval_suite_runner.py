@@ -90,9 +90,16 @@ def run_suite(
         / f"{suite.config.benchmark}.json"
     )
     retriever = retriever_factory(effective_settings, suite.config.mode)
-    generator = (
-        generator_factory(effective_settings) if suite.config.generator != "off" else None
-    )
+    if suite.config.generator != "off":
+        generator_settings = Settings.model_validate(
+            {
+                **effective_settings.model_dump(),
+                "generation_provider": suite.config.generator,
+            }
+        )
+        generator = generator_factory(generator_settings)
+    else:
+        generator = None
 
     per_entry: list[EvalSuiteEntryResult] = []
     retrieval_rows: list[dict[str, float]] = []
@@ -170,7 +177,11 @@ def run_suite(
         phase="suite",
         pipeline=pipeline,
         benchmark=suite.config.benchmark,
-        split="dev",
+        split=(
+            "mixed"
+            if any(entry.source == "authored" for entry in suite.entries)
+            else "dev"
+        ),
         retriever_metrics=retriever_metrics,
         answer_metrics=answer_metrics,
         latency_ms=latency_percentiles_ms(latencies_ms),
