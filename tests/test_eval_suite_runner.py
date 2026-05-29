@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from src.config.settings import Settings
 from src.evaluation.eval_suite import DatasetRef, EvalSuite, SuiteConfig, SuiteEntry
-from src.evaluation.eval_suite_runner import run_suite
+from src.evaluation.eval_suite_runner import EvalSuiteRunResult, run_suite
 from src.models.query_schemas import Citation, GroundedAnswer, PassageHit, RetrievalMetrics
 from src.retrieval.qdrant_retrievers import Mode
 
@@ -32,9 +32,11 @@ class FakeGenerator:
     def __init__(self, answers_by_query: dict[str, str]) -> None:
         self.answers_by_query = answers_by_query
         self.calls: list[str] = []
+        self.hits_received: list[int] = []
 
     def generate(self, query: str, hits: list[PassageHit]) -> GroundedAnswer:
         self.calls.append(query)
+        self.hits_received.append(len(hits))
         return GroundedAnswer(
             answer=self.answers_by_query[query],
             citations=[Citation(point_id=hits[0].point_id)] if hits else [],
@@ -414,6 +416,239 @@ def test_run_suite_rejects_empty_or_authored_only_suite(tmp_path: Path) -> None:
         )
 
 
+def test_run_suite_retrieves_at_least_ten_hits_for_top_k_below_ten(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p1", "p2", "p3"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        config=_config(top_k=5),
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever(
+        {"Question one?": ["p1", "x1", "x2", "x3", "x4", "p2", "p3", "x5", "x6", "x7"]}
+    )
+    generator = FakeGenerator({"Question one?": "Paris"})
+
+    result = run_suite(
+        suite,
+        app_settings=settings,
+        retriever_factory=lambda settings, mode: retriever,
+        generator_factory=lambda settings: generator,
+        launched_via="cli",
+        run_id="run-1",
+        commit_sha="abc123",
+    )
+
+    assert retriever.calls[0][1] == 10
+    assert generator.hits_received == [5]
+    assert result.row.retriever_metrics.recall_at_10 == pytest.approx(1.0)
+    assert result.row.retriever_metrics.recall_at_5 == pytest.approx(1.0 / 3.0)
+
+
+def test_run_suite_uses_top_k_when_above_ten(tmp_path: Path) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p5"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        config=_config(top_k=20),
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever(
+        {"Question one?": [f"p{index}" for index in range(1, 21)]}
+    )
+    generator = FakeGenerator({"Question one?": "Paris"})
+
+    run_suite(
+        suite,
+        app_settings=settings,
+        retriever_factory=lambda settings, mode: retriever,
+        generator_factory=lambda settings: generator,
+        launched_via="cli",
+        run_id="run-1",
+        commit_sha="abc123",
+    )
+
+    assert retriever.calls[0][1] == 20
+    assert generator.hits_received == [20]
+
+
+def test_run_suite_top_k_equals_ten_no_inflation(tmp_path: Path) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p1"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        config=_config(top_k=10),
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever(
+        {"Question one?": ["x1", "x2", "x3", "x4", "p1", "x5", "x6", "x7", "x8", "x9"]}
+    )
+    generator = FakeGenerator({"Question one?": "Paris"})
+
+    run_suite(
+        suite,
+        app_settings=settings,
+        retriever_factory=lambda settings, mode: retriever,
+        generator_factory=lambda settings: generator,
+        launched_via="cli",
+        run_id="run-1",
+        commit_sha="abc123",
+    )
+
+    assert retriever.calls[0][1] == 10
+    assert generator.hits_received == [10]
+
+
+def test_pipeline_label_dense_with_reranker_is_just_dense(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="dense", reranker="reranker-x"),
+    )
+
+    assert result.row.pipeline == "dense"
+
+
+def test_pipeline_label_sparse_with_reranker_is_just_sparse(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="sparse", reranker="reranker-x"),
+    )
+
+    assert result.row.pipeline == "sparse"
+
+
+def test_pipeline_label_hybrid_off_is_just_hybrid(tmp_path: Path) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="hybrid", reranker="off"),
+    )
+
+    assert result.row.pipeline == "hybrid"
+
+
+def test_pipeline_label_hybrid_with_reranker_is_hybrid_plus_rerank(
+    tmp_path: Path,
+) -> None:
+    result = _run_single_entry_suite(
+        tmp_path,
+        config=_config(mode="hybrid", reranker="reranker-x"),
+    )
+
+    assert result.row.pipeline == "hybrid+rerank"
+
+
+def _run_single_entry_suite(
+    tmp_path: Path,
+    *,
+    config: SuiteConfig,
+) -> EvalSuiteRunResult:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "Question one?",
+                    "gold_answers": ["Paris"],
+                    "supporting_passage_ids": ["p1"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(
+        config=config,
+        entries=[
+            _entry(
+                "e1",
+                question="Question one?",
+                gold_answers=["Paris"],
+                question_id="q1",
+            )
+        ],
+    )
+    retriever = FakeRetriever({"Question one?": ["p1"]})
+    generator = FakeGenerator({"Question one?": "Paris"})
+
+    return run_suite(
+        suite,
+        app_settings=settings,
+        retriever_factory=lambda settings, mode: retriever,
+        generator_factory=lambda settings: generator,
+        launched_via="cli",
+        run_id="run-1",
+        commit_sha="abc123",
+    )
+
+
 def _suite(
     *,
     config: SuiteConfig | None = None,
@@ -436,12 +671,13 @@ def _config(
     reranker: str = "reranker-test",
     generator: str = "heuristic",
     mode: Mode = "hybrid",
+    top_k: int = 10,
 ) -> SuiteConfig:
     return SuiteConfig(
         benchmark="nq",
         collection="suite-collection",
         mode=mode,
-        top_k=10,
+        top_k=top_k,
         reranker=reranker,
         generator=generator,
     )

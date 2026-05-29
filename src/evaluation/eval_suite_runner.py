@@ -111,14 +111,20 @@ def run_suite(
         supporting = _supporting_passage_ids(entry, supporting_lookup)
 
         started_at = time.perf_counter()
-        hits = retriever.retrieve(entry.question, top_k=suite.config.top_k)
-        grounded = generator.generate(entry.question, hits) if generator is not None else None
+        scoring_top_k = max(suite.config.top_k, 10)
+        scoring_hits = retriever.retrieve(entry.question, top_k=scoring_top_k)
+        generation_hits = scoring_hits[: suite.config.top_k]
+        grounded = (
+            generator.generate(entry.question, generation_hits)
+            if generator is not None
+            else None
+        )
         latency_ms = (time.perf_counter() - started_at) * 1000.0
         latencies_ms.append(latency_ms)
 
         recall_at_5: float | None = None
         if supporting:
-            retrieved_ids = [hit.point_id for hit in hits]
+            retrieved_ids = [hit.point_id for hit in scoring_hits]
             relevant_ids = set(supporting)
             row = {
                 "r1": compute_recall_at_k(retrieved_ids, relevant_ids, k=1),
@@ -226,8 +232,8 @@ def _supporting_passage_ids(
 
 
 def _pipeline_label(mode: str, reranker: str) -> str:
-    if reranker != "off":
-        return f"{mode}+rerank"
+    if mode == "hybrid" and reranker != "off":
+        return "hybrid+rerank"
     return mode
 
 
