@@ -91,6 +91,11 @@ class ScoreboardRow(BaseModel):
     models: ModelSet
     commit_sha: str
     notes: str | None = None
+    suite_id: str | None = None
+    suite_name: str | None = None
+    run_id: str | None = None
+    num_questions: int | None = None
+    launched_via: Literal["ui", "cli"] | None = None
 
 
 class Scoreboard(BaseModel):

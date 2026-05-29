@@ -126,6 +126,21 @@ class UpdateEntryRequest(BaseModel):
     notes: str | None = None
 
 
+class RunStatusResponse(BaseModel):
+    """Status payload for an evaluation-suite run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    suite_id: str
+    status: Literal["queued", "running", "done", "error", "cancelled"]
+    completed: int
+    total: int
+    started_at: datetime.datetime | None = None
+    finished_at: datetime.datetime | None = None
+    error: str | None = None
+
+
 class ComponentChoice(BaseModel):
     """Named component option exposed to clients."""
 

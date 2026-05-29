@@ -5,11 +5,13 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
@@ -32,6 +34,7 @@ from app.api.schemas import (
     RetrievalConfigMetadata,
     RetrieveRequest,
     RootResponse,
+    RunStatusResponse,
     RuntimeConfigResponse,
     SuiteDetail,
     SuiteSummary,
@@ -40,6 +43,9 @@ from app.api.schemas import (
 )
 from src.config.settings import Settings
 from src.evaluation import eval_suite
+from src.evaluation import scoreboard as scoreboard_module
+from src.evaluation.eval_suite_registry import EvalSuiteRegistry, RunStatus, get_registry
+from src.evaluation.eval_suite_runner import run_suite
 from src.evaluation.per_query_metrics import (
     compute_em,
     compute_f1,
@@ -114,6 +120,7 @@ def create_app(
     retriever_factory: RetrieverFactory | None = None,
     generator_factory: GeneratorFactory | None = None,
     scoreboard_path_factory: ScoreboardPathFactory | None = None,
+    run_registry: EvalSuiteRegistry | None = None,
 ) -> FastAPI:
     """Build the HTTP app with injectable dependencies for tests."""
 
@@ -122,6 +129,7 @@ def create_app(
     make_retriever = retriever_factory or _default_retriever_factory
     make_generator = generator_factory or _default_generator_factory
     suites_dir = app_settings.output_dir / "eval_suites"
+    registry = run_registry if run_registry is not None else get_registry()
 
     app = FastAPI(
         title="RAG NQ Showcase API",
@@ -338,6 +346,67 @@ def create_app(
             )
         return _suite_detail(suite)
 
+    @app.post(
+        "/api/suites/{suite_id}/runs",
+        response_model=RunStatusResponse,
+        status_code=202,
+    )
+    def start_suite_run(suite_id: str) -> RunStatusResponse:
+        suite = eval_suite.load_suite(suite_id, suites_dir)
+        if suite is None:
+            raise HTTPException(status_code=404, detail=f"Suite {suite_id!r} not found.")
+        if not suite.entries:
+            raise HTTPException(status_code=422, detail="Suite has no entries.")
+        has_dataset = any(
+            entry.source == "dataset" and entry.dataset_ref is not None
+            for entry in suite.entries
+        )
+        if not has_dataset:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "suite has no entries with supporting-passage gold; "
+                    "cannot populate retriever_metrics"
+                ),
+            )
+        run_id = uuid4().hex
+        registry.create(run_id=run_id, suite_id=suite_id, total=len(suite.entries))
+
+        def _worker() -> None:
+            try:
+                registry.mark_running(run_id)
+                result = run_suite(
+                    suite,
+                    app_settings=app_settings,
+                    retriever_factory=make_retriever,
+                    generator_factory=make_generator,
+                    launched_via="ui",
+                    run_id=run_id,
+                    progress_cb=lambda n: registry.mark_progress(run_id, n),
+                )
+                scoreboard_path = (
+                    scoreboard_path_factory()
+                    if scoreboard_path_factory
+                    else SCOREBOARD_PATH
+                )
+                scoreboard_module.add_row(result.row, scoreboard_path)
+                registry.mark_done(run_id)
+            except Exception as exc:  # noqa: BLE001 -- caught and surfaced via registry
+                LOGGER.exception("suite run failed run_id=%s", run_id)
+                registry.mark_error(run_id, str(exc))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        status = registry.get(run_id)
+        assert status is not None
+        return _run_status_response(status)
+
+    @app.get("/api/suites/runs/{run_id}", response_model=RunStatusResponse)
+    def suite_run_status(run_id: str) -> RunStatusResponse:
+        status = registry.get(run_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found.")
+        return _run_status_response(status)
+
     @app.get("/api/components", response_model=ComponentsResponse)
     def components() -> ComponentsResponse:
         openai_enabled, disabled_reason = _openai_availability()
@@ -438,6 +507,19 @@ def _suite_detail(suite: eval_suite.EvalSuite) -> SuiteDetail:
         updated_at=suite.updated_at,
         config=suite.config,
         entries=suite.entries,
+    )
+
+
+def _run_status_response(status: RunStatus) -> RunStatusResponse:
+    return RunStatusResponse(
+        run_id=status.run_id,
+        suite_id=status.suite_id,
+        status=status.status,
+        completed=status.completed,
+        total=status.total,
+        started_at=status.started_at,
+        finished_at=status.finished_at,
+        error=status.error,
     )
 
 

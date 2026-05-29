@@ -189,6 +189,33 @@ def test_add_row_creates_parent_directory(tmp_path: Path) -> None:
     assert len(load_scoreboard(path).rows) == 1
 
 
+def test_suite_provenance_fields_are_optional_and_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "scoreboard.json"
+    legacy_row = _sample_row()
+    suite_row = _sample_row().model_copy(
+        update={
+            "phase": "suite",
+            "suite_id": "suite-1",
+            "suite_name": "NQ Smoke Suite",
+            "run_id": "run-1",
+            "num_questions": 2,
+            "launched_via": "cli",
+        }
+    )
+
+    add_row(legacy_row, path)
+    add_row(suite_row, path)
+    scoreboard = load_scoreboard(path)
+
+    assert scoreboard.rows[0].suite_id is None
+    assert scoreboard.rows[0].launched_via is None
+    assert scoreboard.rows[1].suite_id == "suite-1"
+    assert scoreboard.rows[1].suite_name == "NQ Smoke Suite"
+    assert scoreboard.rows[1].run_id == "run-1"
+    assert scoreboard.rows[1].num_questions == 2
+    assert scoreboard.rows[1].launched_via == "cli"
+
+
 def _sample_row(
     *,
     phase: str = "P3",
