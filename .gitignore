@@ -55,3 +55,6 @@ artifacts/
 
 # runtime hook breadcrumbs (generated; .claude/settings.json IS tracked)
 .claude/hooks/
+
+# brainstorming visual-companion scaffolding (Claude-only, never committed)
+.superpowers/
