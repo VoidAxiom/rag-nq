@@ -180,6 +180,16 @@ function canonicalAgentType(raw) {
   // canonical role name. The prefix is controlled by the parent's spawn
   // convention; no other role uses it.
   if (raw.startsWith(IMPL_ROLE + '-')) return IMPL_ROLE
+  // ui-implementer is a sibling impl class: same workflow as the codex
+  // implementer (worktree, gates, /code-review, scope check, commit, PR,
+  // @codex review loop), but writes code directly (Edit/Write/MultiEdit)
+  // rather than dispatching codex exec. Its scope is constrained to
+  // `app/web/**` (frontend only) by spec — enforced by the per-packet
+  // allowlist check at pre-PR, not by this hook (which only enforces the
+  // role-level Claude-only blocklist). Map to IMPL_ROLE so the hook grants
+  // it the same role-level write permissions as the codex implementer.
+  if (raw === 'ui-implementer') return IMPL_ROLE
+  if (raw.startsWith('ui-implementer-')) return IMPL_ROLE
   return raw
 }
 
