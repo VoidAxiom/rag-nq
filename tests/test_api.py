@@ -1049,3 +1049,180 @@ def test_all_api_routes_are_namespaced_under_api_prefix(tmp_path: Path) -> None:
             f"Route {path!r} is not under /api/*; Vite dev proxy will 404. "
             f"Add it under /api/* or extend the allowed-non-api list."
         )
+
+
+def test_suite_run_endpoint_launches_background_run_and_writes_scoreboard(
+    tmp_path: Path,
+) -> None:
+    import datetime
+    import json
+    import time
+
+    from src.evaluation import eval_suite
+    from src.evaluation.eval_suite import DatasetRef, EvalSuite, SuiteConfig, SuiteEntry
+    from src.evaluation.eval_suite_registry import EvalSuiteRegistry
+    from src.evaluation.scoreboard import load_scoreboard
+
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    eval_questions_dir = settings.output_dir / "eval_questions"
+    eval_questions_dir.mkdir(parents=True)
+    (eval_questions_dir / "nq.json").write_text(
+        json.dumps(
+            [
+                {
+                    "query_id": "q1",
+                    "query": "What is Paris?",
+                    "gold_answers": ["Grounded answer for What is Paris?"],
+                    "supporting_passage_ids": ["hybrid-1"],
+                    "notes": None,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    now = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)  # noqa: UP017
+    suite = EvalSuite(
+        id="suite-1",
+        name="Suite One",
+        description=None,
+        created_at=now,
+        updated_at=now,
+        config=SuiteConfig(
+            benchmark="nq",
+            collection="nq_passages_qwen3_embed_4b",
+            mode="hybrid",
+            top_k=5,
+            reranker="off",
+            generator="heuristic",
+        ),
+        entries=[
+            SuiteEntry(
+                id="entry-1",
+                question="What is Paris?",
+                gold_answers=["Grounded answer for What is Paris?"],
+                source="dataset",
+                dataset_ref=DatasetRef(benchmark="nq", question_id="q1"),
+            )
+        ],
+    )
+    eval_suite.save_suite(suite, settings.output_dir / "eval_suites")
+    registry = EvalSuiteRegistry()
+    app = create_app(
+        settings=settings,
+        retriever_factory=lambda settings, mode: FakeRetriever(mode=mode),
+        generator_factory=lambda settings: FakeGenerator(),
+        run_registry=registry,
+    )
+    client = TestClient(app)
+
+    start_response = client.post("/api/suites/suite-1/runs")
+
+    assert start_response.status_code == 202
+    run_id = start_response.json()["run_id"]
+    assert start_response.json()["suite_id"] == "suite-1"
+    assert start_response.json()["total"] == 1
+
+    status_payload = None
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        status_response = client.get(f"/api/suites/runs/{run_id}")
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        if status_payload["status"] in {"done", "error"}:
+            break
+        time.sleep(0.05)
+
+    assert status_payload is not None
+    assert status_payload["status"] == "done"
+    assert status_payload["completed"] == 1
+    scoreboard = load_scoreboard(settings.output_dir / "scoreboard.json")
+    assert len(scoreboard.rows) == 1
+    row = scoreboard.rows[0]
+    assert row.suite_id == "suite-1"
+    assert row.run_id == run_id
+    assert row.launched_via == "ui"
+    assert row.num_questions == 1
+    assert row.retriever_metrics.recall_at_5 == 1.0
+
+
+def test_suite_run_endpoint_rejects_missing_empty_and_authored_only_suites(
+    tmp_path: Path,
+) -> None:
+    import datetime
+
+    from src.evaluation import eval_suite
+    from src.evaluation.eval_suite import EvalSuite, SuiteConfig, SuiteEntry
+    from src.evaluation.eval_suite_registry import EvalSuiteRegistry
+
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    registry = EvalSuiteRegistry()
+    app = create_app(
+        settings=settings,
+        retriever_factory=lambda settings, mode: FakeRetriever(mode=mode),
+        generator_factory=lambda settings: FakeGenerator(),
+        run_registry=registry,
+    )
+    client = TestClient(app)
+
+    missing_response = client.post("/api/suites/missing/runs")
+
+    assert missing_response.status_code == 404
+
+    now = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)  # noqa: UP017
+    empty_suite = EvalSuite(
+        id="empty-suite",
+        name="Empty Suite",
+        description=None,
+        created_at=now,
+        updated_at=now,
+        config=SuiteConfig(
+            benchmark="nq",
+            collection="nq_passages_qwen3_embed_4b",
+            mode="hybrid",
+            top_k=5,
+            reranker="off",
+            generator="heuristic",
+        ),
+        entries=[],
+    )
+    authored_suite = empty_suite.model_copy(
+        update={
+            "id": "authored-suite",
+            "name": "Authored Suite",
+            "entries": [
+                SuiteEntry(
+                    id="entry-1",
+                    question="What is Paris?",
+                    gold_answers=["Paris"],
+                    source="authored",
+                    dataset_ref=None,
+                )
+            ],
+        }
+    )
+    eval_suite.save_suite(empty_suite, settings.output_dir / "eval_suites")
+    eval_suite.save_suite(authored_suite, settings.output_dir / "eval_suites")
+
+    empty_response = client.post("/api/suites/empty-suite/runs")
+    authored_response = client.post("/api/suites/authored-suite/runs")
+
+    assert empty_response.status_code == 422
+    assert empty_response.json()["detail"] == "Suite has no entries."
+    assert authored_response.status_code == 422
+    assert "supporting-passage gold" in authored_response.json()["detail"]
+
+
+def test_suite_run_status_endpoint_returns_404_for_unknown_run(tmp_path: Path) -> None:
+    from src.evaluation.eval_suite_registry import EvalSuiteRegistry
+
+    app = create_app(
+        settings=Settings(output_dir=tmp_path / "artifacts"),
+        retriever_factory=lambda settings, mode: FakeRetriever(mode=mode),
+        generator_factory=lambda settings: FakeGenerator(),
+        run_registry=EvalSuiteRegistry(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/suites/runs/missing")
+
+    assert response.status_code == 404

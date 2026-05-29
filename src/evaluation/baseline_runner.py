@@ -177,6 +177,9 @@ def _latency_percentiles_ms(latencies_ms: list[float]) -> LatencyMs:
     return LatencyMs(p50=int(round(p50)), p95=int(round(p95)))
 
 
+latency_percentiles_ms = _latency_percentiles_ms
+
+
 def run_baseline(
     settings: Settings,
     *,
