@@ -155,7 +155,7 @@ function AskPageContent({
     selectedCollection?.benchmark ?? components.collections[0]?.benchmark ?? ''
 
   useEffect(() => {
-    const normalized = searchStateToParams(searchState)
+    const normalized = searchStateToParams(searchState, searchParams)
     if (normalized.toString() !== searchParams.toString()) {
       setSearchParams(normalized, { replace: true, preventScrollReset: true })
     }
@@ -481,14 +481,21 @@ function readAskSearchState(
   }
 }
 
-function searchStateToParams(state: AskSearchState): URLSearchParams {
-  const params = new URLSearchParams()
+function searchStateToParams(
+  state: AskSearchState,
+  current: URLSearchParams,
+): URLSearchParams {
+  // Start from the current params so unrelated keys (e.g. style/palette from a
+  // shared URL) survive the Ask-state normalization round trip.
+  const params = new URLSearchParams(current)
   params.set('mode', state.mode)
   params.set('top_k', String(state.topK))
   params.set('reranker', state.reranker)
   params.set('generator', state.generator)
   if (state.collection !== '') params.set('collection', state.collection)
+  else params.delete('collection')
   if (state.qId !== null) params.set('q_id', state.qId)
+  else params.delete('q_id')
   return params
 }
 

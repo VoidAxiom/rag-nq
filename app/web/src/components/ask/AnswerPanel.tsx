@@ -69,7 +69,7 @@ export function AnswerPanel({ grounded, reveal }: AnswerPanelProps) {
       <div className="answer__label">
         {visible ? '⟨ Answer ⟩' : 'Awaiting answer'}
       </div>
-      {grounded?.abstained === true ? (
+      {visible && grounded?.abstained === true ? (
         <div>
           <span className="answer__abstained">Abstained</span>
           {grounded.abstention_reason !== null &&

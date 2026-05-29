@@ -7,7 +7,7 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, useLocation } from 'react-router'
 
 import { AskPage } from '@/pages/AskPage'
 import { ThemeProvider } from '@/theme/ThemeProvider'
@@ -284,7 +284,26 @@ describe('AskPage', () => {
     expect(document.documentElement.dataset.style).toBe('editorial')
     expect(document.documentElement.dataset.palette).toBe('editorial-print')
   })
+
+  it('URL theme params survive Ask-state normalization', async () => {
+    stubAskFetch()
+    renderAskPage(['/ask?style=editorial&palette=editorial-bloomberg'])
+    // Wait for the components fetch + normalization effect to settle.
+    await screen.findByLabelText('Retrieval mode')
+    const search = await screen.findByTestId('current-search')
+    const params = new URLSearchParams(search.textContent ?? '')
+    // Ask params get filled in by normalization.
+    expect(params.get('mode')).not.toBeNull()
+    // Theme params are preserved so the URL stays shareable.
+    expect(params.get('style')).toBe('editorial')
+    expect(params.get('palette')).toBe('editorial-bloomberg')
+  })
 })
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="current-search">{location.search.replace(/^\?/, '')}</div>
+}
 
 function renderAskPage(initialEntries: string[] = ['/ask']): void {
   const queryClient = new QueryClient({
@@ -300,6 +319,7 @@ function renderAskPage(initialEntries: string[] = ['/ask']): void {
           <AskPage />
           {/* Render the theme picker so the round-trip test can target it. */}
           <ThemePicker />
+          <LocationProbe />
         </MemoryRouter>
       </ThemeProvider>
     </QueryClientProvider>,
