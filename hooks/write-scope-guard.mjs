@@ -89,7 +89,7 @@ for (const entry of _scopeEntries) {
 // anywhere inside the active write root EXCEPT these. Strict-prefix dir
 // match + exact-file match + anchored basename match (no substring-anywhere).
 // Used only when SCOPE_MODE === 'blocklist'.
-const CLAUDE_ONLY_DIRS = ['.claude', '.codex', 'hooks', 'docs', 'architecture', '.understand-anything']
+const CLAUDE_ONLY_DIRS = ['.claude', '.codex', 'hooks', 'docs', 'architecture', '.understand-anything', '.superpowers']
 const CLAUDE_ONLY_FILES = ['.gitignore']
 const CLAUDE_ONLY_BASENAME_RE = /\.md$/i
 
@@ -423,11 +423,12 @@ process.stdin.on('end', () => {
         startsWithDir('hooks') ||
         startsWithDir('docs') ||
         startsWithDir('architecture') ||
-        startsWithDir('.understand-anything')
+        startsWithDir('.understand-anything') ||
+        startsWithDir('.superpowers')
       ) return allow()
       return deny(
         'Claude',
-        'scripts/**, **/*.test.*, .claude/**, .codex/**, .codex-runs/**, hooks/**, docs/**, architecture/**, .understand-anything/**, **/*.md, or .gitignore (root only)',
+        'scripts/**, **/*.test.*, .claude/**, .codex/**, .codex-runs/**, hooks/**, docs/**, architecture/**, .understand-anything/**, .superpowers/**, **/*.md, or .gitignore (root only)',
         rawFp,
         resolved,
       )
