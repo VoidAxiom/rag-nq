@@ -12,6 +12,7 @@ from src.config.settings import Settings
 from src.ingestion.models import IndexChunk
 from src.ingestion.musique_loader import MuSiQueGoldQuestion, MuSiQueLoader
 from src.scripts.curate_eval_questions import curate
+from src.scripts.ingest_multihop import _multihop_point_id
 
 
 def test_curate_nq_from_index_chunks_is_deterministic(tmp_path: Path) -> None:
@@ -59,10 +60,14 @@ def test_curate_musique_writes_well_formed_questions(
     assert all(question.query for question in questions)
     assert all(question.gold_answers for question in questions)
     supporting_ids_by_query = {
-        gold.question: gold.supporting_passage_ids for gold in gold_questions
+        gold.question: [
+            _multihop_point_id(passage_id)
+            for passage_id in gold.supporting_passage_ids
+        ]
+        for gold in gold_questions
     }
     assert all(
-        question.supporting_passage_ids == list(supporting_ids_by_query[question.query])
+        question.supporting_passage_ids == supporting_ids_by_query[question.query]
         for question in questions
     )
     written = TypeAdapter(list[EvalQuestion]).validate_json(
@@ -85,6 +90,33 @@ def test_curate_musique_is_deterministic(
 
     assert first == second
     assert first_bytes == second_bytes
+
+
+def test_curate_musique_supporting_passage_ids_are_index_point_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "artifacts"
+    canonical_ids = ("musique-row-alpha-0", "musique-row-alpha-1")
+    _patch_musique_gold_questions(
+        monkeypatch,
+        [
+            MuSiQueGoldQuestion(
+                row_id="row-alpha",
+                question="Who designed the Analytical Engine?",
+                gold_answers=("Ada Lovelace",),
+                supporting_passage_ids=canonical_ids,
+            )
+        ],
+    )
+
+    questions = curate("musique", sample_size=1, seed=0, output_dir=output_dir)
+
+    assert len(questions) == 1
+    question = questions[0]
+    assert question.supporting_passage_ids == [
+        _multihop_point_id(passage_id) for passage_id in canonical_ids
+    ]
+    assert question.supporting_passage_ids != list(canonical_ids)
 
 
 def _write_index_chunks(path: Path) -> None:

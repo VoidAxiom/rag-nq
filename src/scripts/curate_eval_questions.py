@@ -15,6 +15,7 @@ from app.api.schemas import EvalQuestion
 from src.config.settings import Settings
 from src.evaluation.retrieval_eval import EvalCase, build_eval_cases_from_index_artifact
 from src.ingestion.musique_loader import MuSiQueLoader
+from src.scripts.ingest_multihop import _multihop_point_id
 
 CuratableBenchmark = Literal["nq", "musique"]
 
@@ -131,7 +132,10 @@ def _build_musique_cases() -> list[EvalCase]:
             EvalCase(
                 query=gold.question,
                 answer_texts=list(gold.gold_answers),
-                relevant_passage_ids=list(gold.supporting_passage_ids),
+                relevant_passage_ids=[
+                    _multihop_point_id(passage_id)
+                    for passage_id in gold.supporting_passage_ids
+                ],
             )
         )
     return cases
