@@ -235,14 +235,118 @@ def test_eval_questions_endpoint_unknown_benchmark_returns_404(tmp_path: Path) -
     assert response.status_code == 404
 
 
-def test_eval_questions_endpoint_missing_file_returns_503(tmp_path: Path) -> None:
+def test_eval_questions_endpoint_missing_file_returns_empty(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.get("/api/eval_questions/nq")
 
-    assert response.status_code == 503
-    assert "Eval questions file not found at" in response.json()["detail"]
-    assert "P1-F curation step not run yet." in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json() == {"benchmark": "nq", "questions": []}
+
+
+def test_suite_crud_endpoints_roundtrip(tmp_path: Path) -> None:
+    settings = Settings(output_dir=tmp_path / "artifacts")
+    client = _client(tmp_path, settings=settings)
+    config = {
+        "benchmark": "nq",
+        "collection": "nq_passages_qwen3_embed_4b",
+        "mode": "hybrid",
+        "top_k": 10,
+        "reranker": "BAAI/bge-reranker-v2-m3",
+        "generator": "heuristic",
+    }
+
+    create_response = client.post(
+        "/api/suites",
+        json={
+            "name": "NQ Smoke Suite",
+            "description": "Small deterministic suite",
+            "config": config,
+        },
+    )
+
+    assert create_response.status_code == 201
+    suite = create_response.json()
+    suite_id = suite["id"]
+    suite_path = settings.output_dir / "eval_suites" / f"{suite_id}.json"
+    assert tmp_path in suite_path.parents
+    assert suite_path.is_file()
+    assert suite["name"] == "NQ Smoke Suite"
+    assert suite["entries"] == []
+
+    list_response = client.get("/api/suites")
+    assert list_response.status_code == 200
+    summary = next(item for item in list_response.json() if item["id"] == suite_id)
+    assert summary["entry_count"] == 0
+    assert summary["config"] == config
+
+    detail_response = client.get(f"/api/suites/{suite_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["entries"] == []
+
+    updated_config = {**config, "top_k": 5}
+    update_suite_response = client.put(
+        f"/api/suites/{suite_id}",
+        json={
+            "name": "NQ Smoke Suite Updated",
+            "description": "Updated description",
+            "config": updated_config,
+        },
+    )
+    assert update_suite_response.status_code == 200
+    assert update_suite_response.json()["name"] == "NQ Smoke Suite Updated"
+    assert update_suite_response.json()["config"] == updated_config
+
+    add_entry_response = client.post(
+        f"/api/suites/{suite_id}/entries",
+        json={
+            "question": "What is the capital of France?",
+            "gold_answers": ["Paris"],
+            "source": "dataset",
+            "dataset_ref": {"benchmark": "nq", "question_id": "nq-1"},
+            "notes": "fixture",
+        },
+    )
+
+    assert add_entry_response.status_code == 201
+    entry_suite = add_entry_response.json()
+    assert len(entry_suite["entries"]) == 1
+    entry = next(iter(entry_suite["entries"]))
+    entry_id = entry["id"]
+    assert entry["question"] == "What is the capital of France?"
+    assert entry["gold_answers"] == ["Paris"]
+
+    detail_with_entry_response = client.get(f"/api/suites/{suite_id}")
+    assert detail_with_entry_response.status_code == 200
+    assert detail_with_entry_response.json()["entries"] == [entry]
+
+    update_entry_response = client.put(
+        f"/api/suites/{suite_id}/entries/{entry_id}",
+        json={
+            "question": "Which city is France's capital?",
+            "gold_answers": ["Paris", "City of Paris"],
+            "notes": "updated",
+        },
+    )
+
+    assert update_entry_response.status_code == 200
+    updated_entry = next(iter(update_entry_response.json()["entries"]))
+    assert updated_entry["id"] == entry_id
+    assert updated_entry["question"] == "Which city is France's capital?"
+    assert updated_entry["gold_answers"] == ["Paris", "City of Paris"]
+    assert updated_entry["notes"] == "updated"
+
+    delete_entry_response = client.delete(f"/api/suites/{suite_id}/entries/{entry_id}")
+    assert delete_entry_response.status_code == 200
+    assert delete_entry_response.json()["entries"] == []
+
+    delete_suite_response = client.delete(f"/api/suites/{suite_id}")
+    assert delete_suite_response.status_code == 204
+    assert delete_suite_response.content == b""
+    assert not suite_path.exists()
+
+    missing_detail_response = client.get(f"/api/suites/{suite_id}")
+    assert missing_detail_response.status_code == 404
 
 
 def test_components_endpoint_reports_openai_disabled_when_env_unset(

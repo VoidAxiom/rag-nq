@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import time
@@ -16,10 +17,12 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.staticfiles import StaticFiles
 
 from app.api.schemas import (
+    AddEntryRequest,
     ArtifactStatus,
     CollectionChoice,
     ComponentChoice,
     ComponentsResponse,
+    CreateSuiteRequest,
     EvalQuestion,
     EvalQuestionsResponse,
     GenerationConfigMetadata,
@@ -30,8 +33,13 @@ from app.api.schemas import (
     RetrieveRequest,
     RootResponse,
     RuntimeConfigResponse,
+    SuiteDetail,
+    SuiteSummary,
+    UpdateEntryRequest,
+    UpdateSuiteRequest,
 )
 from src.config.settings import Settings
+from src.evaluation import eval_suite
 from src.evaluation.per_query_metrics import (
     compute_em,
     compute_f1,
@@ -113,6 +121,7 @@ def create_app(
     app_settings = settings or Settings.from_env()
     make_retriever = retriever_factory or _default_retriever_factory
     make_generator = generator_factory or _default_generator_factory
+    suites_dir = app_settings.output_dir / "eval_suites"
 
     app = FastAPI(
         title="RAG NQ Showcase API",
@@ -219,13 +228,8 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Unknown benchmark {benchmark!r}.")
         path = app_settings.output_dir / "eval_questions" / f"{benchmark}.json"
         if not path.is_file():
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"Eval questions file not found at {path}. "
-                    "P1-F curation step not run yet."
-                ),
-            )
+            # Design section 4 clean-degrade: empty curated files should not block UI use.
+            return EvalQuestionsResponse(benchmark=benchmark, questions=[])
         try:
             questions = TypeAdapter(list[EvalQuestion]).validate_json(
                 path.read_text(encoding="utf-8")
@@ -237,6 +241,102 @@ def create_app(
                 detail=f"Eval questions file at {path} is invalid: {exc}",
             ) from exc
         return EvalQuestionsResponse(benchmark=benchmark, questions=questions)
+
+    @app.get("/api/suites", response_model=list[SuiteSummary])
+    def suites() -> list[SuiteSummary]:
+        return [_suite_summary(suite) for suite in eval_suite.list_suites(suites_dir)]
+
+    @app.post("/api/suites", response_model=SuiteDetail, status_code=201)
+    def create_suite(request: CreateSuiteRequest) -> SuiteDetail:
+        now = _utc_now()
+        suite = eval_suite.EvalSuite(
+            id=eval_suite.new_suite_id(request.name),
+            name=request.name,
+            description=request.description,
+            created_at=now,
+            updated_at=now,
+            config=request.config,
+            entries=[],
+        )
+        eval_suite.save_suite(suite, suites_dir)
+        return _suite_detail(suite)
+
+    @app.get("/api/suites/{suite_id}", response_model=SuiteDetail)
+    def suite_detail(suite_id: str) -> SuiteDetail:
+        suite = eval_suite.load_suite(suite_id, suites_dir)
+        if suite is None:
+            raise HTTPException(status_code=404, detail=f"Suite {suite_id!r} not found.")
+        return _suite_detail(suite)
+
+    @app.put("/api/suites/{suite_id}", response_model=SuiteDetail)
+    def update_suite(suite_id: str, request: UpdateSuiteRequest) -> SuiteDetail:
+        suite = eval_suite.load_suite(suite_id, suites_dir)
+        if suite is None:
+            raise HTTPException(status_code=404, detail=f"Suite {suite_id!r} not found.")
+        update_fields: dict[str, object] = {"updated_at": _utc_now()}
+        if request.name is not None:
+            update_fields["name"] = request.name
+        if request.description is not None:
+            update_fields["description"] = request.description
+        if request.config is not None:
+            update_fields["config"] = request.config
+        updated = suite.model_copy(update=update_fields)
+        eval_suite.save_suite(updated, suites_dir)
+        return _suite_detail(updated)
+
+    @app.delete("/api/suites/{suite_id}", status_code=204)
+    def delete_suite(suite_id: str) -> Response:
+        if not eval_suite.delete_suite(suite_id, suites_dir):
+            raise HTTPException(status_code=404, detail=f"Suite {suite_id!r} not found.")
+        return Response(status_code=204)
+
+    @app.post(
+        "/api/suites/{suite_id}/entries", response_model=SuiteDetail, status_code=201
+    )
+    def add_suite_entry(suite_id: str, request: AddEntryRequest) -> SuiteDetail:
+        suite = eval_suite.add_entry(
+            suite_id,
+            question=request.question,
+            gold_answers=request.gold_answers,
+            source=request.source,
+            dataset_ref=request.dataset_ref,
+            notes=request.notes,
+            suites_dir=suites_dir,
+        )
+        if suite is None:
+            raise HTTPException(status_code=404, detail=f"Suite {suite_id!r} not found.")
+        return _suite_detail(suite)
+
+    @app.put("/api/suites/{suite_id}/entries/{entry_id}", response_model=SuiteDetail)
+    def update_suite_entry(
+        suite_id: str, entry_id: str, request: UpdateEntryRequest
+    ) -> SuiteDetail:
+        suite = eval_suite.update_entry(
+            suite_id,
+            entry_id,
+            question=request.question,
+            gold_answers=request.gold_answers,
+            source=request.source,
+            dataset_ref=request.dataset_ref,
+            notes=request.notes,
+            suites_dir=suites_dir,
+        )
+        if suite is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Suite {suite_id!r} or entry {entry_id!r} not found.",
+            )
+        return _suite_detail(suite)
+
+    @app.delete("/api/suites/{suite_id}/entries/{entry_id}", response_model=SuiteDetail)
+    def delete_suite_entry(suite_id: str, entry_id: str) -> SuiteDetail:
+        suite = eval_suite.delete_entry(suite_id, entry_id, suites_dir)
+        if suite is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Suite {suite_id!r} or entry {entry_id!r} not found.",
+            )
+        return _suite_detail(suite)
 
     @app.get("/api/components", response_model=ComponentsResponse)
     def components() -> ComponentsResponse:
@@ -315,6 +415,34 @@ def create_app(
             return Response(status_code=404)
 
     return app
+
+
+def _suite_summary(suite: eval_suite.EvalSuite) -> SuiteSummary:
+    return SuiteSummary(
+        id=suite.id,
+        name=suite.name,
+        description=suite.description,
+        created_at=suite.created_at,
+        updated_at=suite.updated_at,
+        config=suite.config,
+        entry_count=len(suite.entries),
+    )
+
+
+def _suite_detail(suite: eval_suite.EvalSuite) -> SuiteDetail:
+    return SuiteDetail(
+        id=suite.id,
+        name=suite.name,
+        description=suite.description,
+        created_at=suite.created_at,
+        updated_at=suite.updated_at,
+        config=suite.config,
+        entries=suite.entries,
+    )
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(tz=datetime.timezone.utc)  # noqa: UP017
 
 
 def safe_runtime_config(settings: Settings) -> RuntimeConfigResponse:

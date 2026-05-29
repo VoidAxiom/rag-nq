@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from src.evaluation.eval_suite import (
+    DatasetRef,
+    SuiteConfig,
+    SuiteEntry,
+)
+from src.evaluation.eval_suite import (
+    EvalSuite as EvalSuite,
+)
 from src.retrieval.qdrant_retrievers import Mode
 
 
@@ -43,6 +52,78 @@ class EvalQuestionsResponse(BaseModel):
 
     benchmark: Literal["nq", "hotpotqa", "2wikimhqa", "musique"]
     questions: list[EvalQuestion]
+
+
+class SuiteSummary(BaseModel):
+    """Summary payload for listing evaluation suites."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    description: str | None = None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    config: SuiteConfig
+    entry_count: int
+
+
+class SuiteDetail(BaseModel):
+    """Full evaluation suite payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    description: str | None = None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    config: SuiteConfig
+    entries: list[SuiteEntry]
+
+
+class CreateSuiteRequest(BaseModel):
+    """Request body for creating an evaluation suite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    description: str | None = None
+    config: SuiteConfig
+
+
+class UpdateSuiteRequest(BaseModel):
+    """Request body for updating evaluation suite metadata/config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    config: SuiteConfig | None = None
+
+
+class AddEntryRequest(BaseModel):
+    """Request body for adding a question to an evaluation suite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1)
+    gold_answers: list[str] = Field(default_factory=list)
+    source: Literal["dataset", "authored"]
+    dataset_ref: DatasetRef | None = None
+    notes: str | None = None
+
+
+class UpdateEntryRequest(BaseModel):
+    """Request body for updating a suite question entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str | None = Field(default=None, min_length=1)
+    gold_answers: list[str] | None = None
+    source: Literal["dataset", "authored"] | None = None
+    dataset_ref: DatasetRef | None = None
+    notes: str | None = None
 
 
 class ComponentChoice(BaseModel):
