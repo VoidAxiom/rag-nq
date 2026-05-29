@@ -141,8 +141,13 @@ export function runPipelineAnimation(opts: SchedulerOptions): Promise<void> {
       }
       stepTickHandle = setTimer(liveTick, 0)
 
-      // Wait for both: (a) the real timing to be known, and (b) the
-      // animated minimum duration (max(real, MIN_STEP_MS)) to elapse.
+      // Advance after the minimum duration even when real timings haven't
+      // arrived yet — the API is one-shot, so under slow generators the
+      // realPromise can resolve well after the animation should already be
+      // showing reranker/generator. We use MIN_STEP_MS as the floor when real
+      // ms is unknown, then clamp to max(real, MIN_STEP_MS) once known. The
+      // final displayed ms still snaps to real (or the live wall-clock when
+      // the request errors before resolving).
       resolveStepAfterMinimum(step).then((resolution) => {
         if (cancelled) return
         if (stepTickHandle !== null) clearTimer(stepTickHandle)
@@ -162,20 +167,69 @@ export function runPipelineAnimation(opts: SchedulerOptions): Promise<void> {
       })
 
       function resolveStepAfterMinimum(currentStep: StepId): Promise<StepResolution> {
-        return realPromise.then((resolved) => {
-          const realMs = resolved[currentStep]
-          const elapsed = now() - stepStart
-          const remaining = Math.max(0, realMs - elapsed, MIN_STEP_MS - elapsed)
-          if (remaining === 0) {
-            return { step: currentStep, realMs }
-          }
-          return new Promise<StepResolution>((res) => {
-            const handle = setTimer(() => {
-              res({ step: currentStep, realMs })
-            }, remaining)
-            // capture so cleanup() can clear it if cancelled mid-wait
-            stepTickHandle = handle
-          })
+        // Wait for whichever of (MIN_STEP_MS elapsed, real timings arrived)
+        // happens first. If real arrives first we may still need to wait
+        // until max(real, MIN_STEP_MS) elapses. If MIN_STEP_MS fires first,
+        // we advance with a placeholder real (the live wall-clock) and let
+        // realPromise's later resolution be captured by other steps that
+        // haven't started yet — the final pipeline reveal still anchors on
+        // real total via the resolve path in startStep.
+        return new Promise<StepResolution>((res, rej) => {
+          let settled = false
+          const minHandle = setTimer(() => {
+            if (settled || cancelled) return
+            if (timings !== null) {
+              const realMs = timings[currentStep]
+              const elapsed = now() - stepStart
+              const remaining = Math.max(0, realMs - elapsed)
+              if (remaining === 0) {
+                settled = true
+                res({ step: currentStep, realMs })
+                return
+              }
+              const waitHandle = setTimer(() => {
+                if (settled || cancelled) return
+                settled = true
+                res({ step: currentStep, realMs })
+              }, remaining)
+              stepTickHandle = waitHandle
+              return
+            }
+            // Real ms still unknown; advance with the live wall-clock so the
+            // animation keeps moving. realPromise will continue resolving in
+            // the background; subsequent steps will pick up the real values.
+            settled = true
+            res({ step: currentStep, realMs: now() - stepStart })
+          }, Math.max(0, MIN_STEP_MS))
+          stepTickHandle = minHandle
+
+          realPromise.then(
+            (resolved) => {
+              if (settled || cancelled) return
+              const realMs = resolved[currentStep]
+              const elapsed = now() - stepStart
+              const remaining = Math.max(0, realMs - elapsed, MIN_STEP_MS - elapsed)
+              if (remaining === 0) {
+                settled = true
+                clearTimer(minHandle)
+                res({ step: currentStep, realMs })
+                return
+              }
+              clearTimer(minHandle)
+              const waitHandle = setTimer(() => {
+                if (settled || cancelled) return
+                settled = true
+                res({ step: currentStep, realMs })
+              }, remaining)
+              stepTickHandle = waitHandle
+            },
+            (err) => {
+              if (settled || cancelled) return
+              settled = true
+              clearTimer(minHandle)
+              rej(err)
+            },
+          )
         })
       }
     }

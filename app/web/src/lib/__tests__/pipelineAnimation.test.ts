@@ -204,6 +204,76 @@ describe('runPipelineAnimation', () => {
     expect(lastByStep.get('generator')).toBe(5)
   })
 
+  it('advances through steps when real timings are slow to arrive', async () => {
+    const clock = makeFakeClock()
+    const events: RecordedEvents = {
+      stepStates: [],
+      stepMs: [],
+      bridges: [],
+      totalMs: [],
+    }
+    // Real timings only resolve after ~2000ms — well past 3 * MIN_STEP_MS.
+    // This simulates a slow /api/query (e.g. a 2-second openai generator).
+    let resolveReal: (t: { retriever: number; reranker: number; generator: number }) => void = () => undefined
+    const realPromise = new Promise<{
+      retriever: number
+      reranker: number
+      generator: number
+    }>((res) => {
+      resolveReal = res
+    })
+
+    const done = runPipelineAnimation({
+      realTimings: realPromise,
+      now: () => clock.now(),
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      callbacks: {
+        onStepState(step, state) {
+          events.stepStates.push({ step, state })
+        },
+        onStepMs(step, ms) {
+          events.stepMs.push({ step, ms })
+        },
+        onBridgeState(idx, state) {
+          events.bridges.push({ idx, state })
+        },
+        onTotalMs(ms) {
+          events.totalMs.push(ms)
+        },
+      },
+    })
+
+    // Advance past 3 * MIN_STEP_MS without resolving realTimings. The
+    // animation must STILL advance: regression for the "stalled retriever
+    // while API in flight" bug codex flagged on PR #32.
+    for (let t = 0; t <= MIN_STEP_MS * 4; t += 25) {
+      clock.advanceTo(t)
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    const completesBeforeReal = events.stepStates.filter(
+      (e) => e.state === 'complete',
+    )
+    // All three steps should have moved through 'running' → 'complete' purely
+    // on MIN_STEP_MS pacing, BEFORE the real timings resolved.
+    expect(completesBeforeReal.map((e) => e.step)).toEqual([
+      'retriever',
+      'reranker',
+      'generator',
+    ])
+
+    // Now resolve realTimings with values smaller than the wall-clock; the
+    // promise should still resolve cleanly.
+    resolveReal({ retriever: 50, reranker: 40, generator: 30 })
+    for (let t = MIN_STEP_MS * 4; t <= MIN_STEP_MS * 6; t += 50) {
+      clock.advanceTo(t)
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    await done
+  })
+
   it('rejects if real timings reject', async () => {
     const clock = makeFakeClock()
     const realPromise = Promise.reject(new Error('boom'))
