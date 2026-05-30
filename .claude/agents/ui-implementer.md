@@ -55,6 +55,28 @@ cd app/web && pnpm dev --host 127.0.0.1 --port "$PORT" --strictPort
 
 Verify Vite's "Local:" line matches `http://127.0.0.1:$PORT/`. If it doesn't bind, STOP and notify Claude — measurement against the wrong port produces meaningless evidence.
 
+## Backend (shared with primary — NEVER start your own uvicorn)
+
+Your Vite dev server proxies `/api/*` to `http://localhost:8000` (see `app/web/vite.config.ts`). The FastAPI backend on :8000 is **always primary's uvicorn process** — never a worktree-local one.
+
+**Why:** `app/api/main.py` loads `Qwen/Qwen3-Embedding-4B` (~8 GB resident on MPS) plus `BAAI/bge-reranker-v2-m3` (~2 GB) into every uvicorn process. Spawning a second uvicorn against the same Qdrant indexes doubles that footprint with zero behavioral benefit — Qdrant collections are shared across all worktrees (`nq_passages_qwen3_embed_4b`, `hotpotqa_passages_qwen3_embed_4b`, etc.). One backend, many frontends.
+
+This is the direct frontend analogue of the existing CLAUDE.md doctrine for Qdrant:
+> "Docker port collision with primary (Qdrant binds 6333) → impl uses a different host port via worktree-local `docker-compose.override.yml`, OR the impl's runtime smoke just hits primary's Qdrant since indexes are shared."
+
+Same logic, same conclusion: hit primary's :8000 — don't spin a duplicate.
+
+**What you do:**
+
+1. Before booting your dev server, check primary's uvicorn is up:
+   ```bash
+   curl -sS http://localhost:8000/api/health | grep -q '"status"' && echo "backend up" || echo "BACKEND DOWN"
+   ```
+2. If it's down, STOP and ping Claude — Claude starts uvicorn from primary's checkout (`/Users/sureshkasipandy/Projects/rag-nq-showcase`), never from your worktree. Do NOT try to start uvicorn yourself from your worktree (`pwd` will be wrong, `app.api.main` imports break, you'll create a second model-loading process).
+3. Once `/api/health` returns 200, boot your Vite dev server on YOUR assigned port (typically not 5173 — collides with primary's frontend if running). The proxy in `vite.config.ts` handles `/api/*` → primary's :8000 transparently.
+
+**Backend-changing packets are out of scope for you.** If the spec asks you to modify request/response schemas, add an endpoint, change retrieval logic, or otherwise touch `app/api/**` or `src/**` — STOP and escalate per § "Hard rejects" below. Those packets go to the codex `implementer`, not to you. The ui-implementer never spawns a worktree uvicorn.
+
 ## Doctrine
 
 A correct mechanical write is the floor, not the ceiling. Your job ends only when:
