@@ -17,7 +17,7 @@ export function PipelineTotal({ state, totalMs }: PipelineTotalProps) {
   return (
     <div className={classNames.join(' ')} aria-live="polite">
       <div className="total__label">Total</div>
-      <div>
+      <div className="total__value">
         <span className="total__num">{seconds.toFixed(2)}</span>
         <span className="total__unit">s</span>
       </div>

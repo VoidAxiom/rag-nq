@@ -215,9 +215,11 @@ function AskPageContent({
   const inFlightTokenRef = useRef<number>(0)
 
   // Whenever a new query lands, snap remaining ms to real values. The animation
-  // scheduler handles step pacing; here we just expose final state on settle.
+  // scheduler handles step pacing; the answer-reveal is decoupled from the
+  // pipeline state machine — once grounded data arrives, the answer renders
+  // regardless of whether the cascade has finished its post-resolve snap.
   const { isPending, data: queryData, error: queryError } = queryMutation
-  const reveal = pipeline.generator === 'complete' && queryData?.grounded != null
+  const reveal = queryData?.grounded != null
 
   const handleSubmit = useCallback(
     (event?: FormEvent<HTMLFormElement>) => {
@@ -267,14 +269,17 @@ function AskPageContent({
         .then((response) => {
           if (inFlightTokenRef.current !== myToken) return
           const latency = response.latency_ms
-          // The TS QueryResponse parser accepts latency_ms=null (see api.ts
-          // parseNullableApiRecord). Production never returns null today, but
-          // the UI must not fabricate zero in a code path the parser permits:
-          // resolving with zeros causes the scheduler to snap every step and
-          // the total to "0ms", which silently lies about the timings. Leave
-          // realPromise unresolved; the scheduler then lets the wall-clock
-          // animation stand as the displayed per-step + total ms.
-          if (latency === null) return
+          // The TS QueryResponse parser accepts latency_ms=null. The scheduler
+          // can no longer fabricate per-step ms (it suppresses numbers during
+          // running entirely), but it still needs realPromise to settle to
+          // transition steps to `complete` and stop the Total ticker. Reject
+          // when latency is missing so the scheduler's reject path tears
+          // everything down cleanly — steps stay in their last cascade state
+          // and the Total card freezes at the last wall-clock tick.
+          if (latency === null) {
+            rejectReal(new Error('backend returned latency_ms=null'))
+            return
+          }
           resolveReal({
             retriever: latency.retrieval_ms,
             reranker: latency.rerank_ms,
