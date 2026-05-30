@@ -250,7 +250,7 @@ function trustedLinkedWorktree(root) {
   return { ok: true, root: resolvedRoot }
 }
 
-function resolveWriteRoot(j, isSub, isImplAgent) {
+function resolveWriteRoot(j, isSub, isImplAgent, rawFp) {
   if (!isSub) return { root: MAIN_PROJECT_ROOT, cwd: MAIN_PROJECT_ROOT }
 
   // Generic env var name (project-agnostic). Worktrees provisioned by
@@ -292,17 +292,47 @@ function resolveWriteRoot(j, isSub, isImplAgent) {
     if (hookRoot) {
       const trusted = trustedLinkedWorktree(hookRoot)
       if (trusted.ok) return { root: trusted.root, cwd: path.resolve(hookCwdRaw) }
-      return {
-        error: `paths inside a trusted linked impl worktree inferred from hook cwd ` +
-               `(cwd=${path.resolve(hookCwdRaw)}; ${trusted.reason})`,
-        resolved: path.resolve(hookCwdRaw),
+      // If cwd is the main checkout, fall through to the target-path-based
+      // fallback below — Agent tool cannot per-subagent-set TRUSTED_WORKTREE_ROOT,
+      // so impl subagents inherit the main-checkout cwd by default and need the
+      // target-path fallback to write into their worktree. If cwd is something
+      // OTHER than main and not a worktree (a weird location), hard-error.
+      if (hookRoot !== MAIN_PROJECT_ROOT) {
+        return {
+          error: `paths inside a trusted linked impl worktree inferred from hook cwd ` +
+                 `(cwd=${path.resolve(hookCwdRaw)}; ${trusted.reason})`,
+          resolved: path.resolve(hookCwdRaw),
+        }
+      }
+    }
+  }
+
+  // Target-path-based fallback for impl subagents. The Task tool API does
+  // not let the spawning Claude set per-subagent env vars (so
+  // TRUSTED_WORKTREE_ROOT can't be plumbed through), and the subagent
+  // session cwd may inherit the main-checkout cwd of the parent. When the
+  // target file_path is ABSOLUTE and resolves into a verified linked
+  // worktree of MAIN_PROJECT_ROOT (round-trip via trustedLinkedWorktree,
+  // which checks the .git pointer file matches the main repo's
+  // .git/worktrees/<name>/ entry — symlink-safe), treat that worktree as
+  // the trusted write root for THIS specific write. Same security
+  // properties as the cwd-based inference at lines 290-301 above; the
+  // only difference is which trust signal seeded the worktree lookup.
+  if (isImplAgent && rawFp && path.isAbsolute(rawFp)) {
+    const targetResolved = path.resolve(rawFp)
+    const targetGitRoot = findGitRoot(path.dirname(targetResolved))
+    if (targetGitRoot && targetGitRoot !== MAIN_PROJECT_ROOT) {
+      const trusted = trustedLinkedWorktree(targetGitRoot)
+      if (trusted.ok) {
+        return { root: trusted.root, cwd: trusted.root }
       }
     }
   }
 
   if (isImplAgent) {
     return {
-      error: 'write-capable impl sessions must set TRUSTED_WORKTREE_ROOT',
+      error: 'write-capable impl sessions must set TRUSTED_WORKTREE_ROOT, ' +
+             'or use absolute paths into a linked worktree of this repo',
       resolved: hookCwdRaw ? path.resolve(hookCwdRaw) : MAIN_PROJECT_ROOT,
     }
   }
@@ -332,7 +362,7 @@ process.stdin.on('end', () => {
     const isImplAgent = isSub && agentType === IMPL_ROLE
     const who = isSub ? `subagent "${agentId || agentTypeRaw || '?'}"` : 'Claude'
 
-    const rootSelection = resolveWriteRoot(j, isSub, isImplAgent)
+    const rootSelection = resolveWriteRoot(j, isSub, isImplAgent, rawFp)
     if (rootSelection.error) {
       return deny(who, rootSelection.error, rawFp, rootSelection.resolved)
     }
