@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.evaluation.eval_suite import (
     DatasetRef,
@@ -240,3 +240,63 @@ class RuntimeConfigResponse(BaseModel):
     retrieval: RetrievalConfigMetadata
     generation: GenerationConfigMetadata
     artifacts: dict[str, ArtifactStatus]
+
+
+class BenchmarkComboSettings(BaseModel):
+    """A single (retriever, reranker, generator) combo to benchmark."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    mode: Mode
+    top_k: int = Field(ge=1, le=50)
+    retrieve_k: int | None = Field(default=None, ge=1, le=300)
+    rerank_enabled: bool = True
+    rerank_model_name: str | None = None
+    generation_provider: Literal["heuristic", "http_json", "openai"] | None = None
+    generation_model_name: str | None = None
+
+
+class BenchmarkAdhocQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["adhoc"] = "adhoc"
+    benchmark: Literal["nq", "hotpotqa", "2wikimhqa", "musique"]
+    query: str = Field(min_length=1, max_length=2000)
+    gold_answers: list[str] = Field(default_factory=list)
+    supporting_passage_ids: list[str] = Field(default_factory=list)
+
+
+class BenchmarkSuiteQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["suite"] = "suite"
+    suite_id: str = Field(min_length=1)
+
+
+class BenchmarkSampleQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["sample"] = "sample"
+    benchmark: Literal["nq", "hotpotqa", "2wikimhqa", "musique"]
+    size: int = Field(ge=1, le=50)
+    strategy: Literal["first", "random"] = "first"
+    seed: int = 42
+
+
+BenchmarkQuestionSet = Annotated[
+    BenchmarkAdhocQuestion | BenchmarkSuiteQuestion | BenchmarkSampleQuestion,
+    Field(discriminator="kind"),
+]
+
+
+class BenchmarkStreamRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_set: BenchmarkQuestionSet
+    combos: list[BenchmarkComboSettings] = Field(min_length=2, max_length=5)
+
+    @field_validator("combos")
+    @classmethod
+    def _unique_ids(cls, v: list[BenchmarkComboSettings]) -> list[BenchmarkComboSettings]:
+        ids = [c.id for c in v]
+        if len(set(ids)) != len(ids):
+            raise ValueError("combo ids must be unique")
+        return v
