@@ -36,6 +36,9 @@ class _RetrieverP(Protocol):
     last_retrieval_metrics: RetrievalMetrics | None
 
     def retrieve(self, query: str, top_k: int) -> list[PassageHit]: ...
+    def retrieve_with_metrics(
+        self, query: str, top_k: int
+    ) -> tuple[list[PassageHit], RetrievalMetrics | None]: ...
 
 
 class _GeneratorP(Protocol):
@@ -112,7 +115,9 @@ def run_suite(
 
         started_at = time.perf_counter()
         scoring_top_k = max(suite.config.top_k, 10)
-        scoring_hits = retriever.retrieve(entry.question, top_k=scoring_top_k)
+        scoring_hits, _ = retriever.retrieve_with_metrics(
+            entry.question, top_k=scoring_top_k
+        )
         generation_hits = scoring_hits[: suite.config.top_k]
         grounded = (
             generator.generate(entry.question, generation_hits)
