@@ -267,10 +267,18 @@ function AskPageContent({
         .then((response) => {
           if (inFlightTokenRef.current !== myToken) return
           const latency = response.latency_ms
+          // The TS QueryResponse parser accepts latency_ms=null (see api.ts
+          // parseNullableApiRecord). Production never returns null today, but
+          // the UI must not fabricate zero in a code path the parser permits:
+          // resolving with zeros causes the scheduler to snap every step and
+          // the total to "0ms", which silently lies about the timings. Leave
+          // realPromise unresolved; the scheduler then lets the wall-clock
+          // animation stand as the displayed per-step + total ms.
+          if (latency === null) return
           resolveReal({
-            retriever: latency?.retrieval_ms ?? 0,
-            reranker: latency?.rerank_ms ?? 0,
-            generator: latency?.generation_ms ?? 0,
+            retriever: latency.retrieval_ms,
+            reranker: latency.rerank_ms,
+            generator: latency.generation_ms,
           })
         })
         .catch((err: unknown) => {

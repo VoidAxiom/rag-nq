@@ -127,6 +127,54 @@ describe('AskPage', () => {
     )
   })
 
+  it('does not fabricate 0 ms when latency_ms is null', async () => {
+    // The TS QueryResponse parser accepts latency_ms=null. On that path the
+    // UI must NOT resolve the scheduler with fabricated zero timings —
+    // doing so causes every step + total to snap to "0 ms" / "0.00 s"
+    // and silently lie about request duration. The fix lets the wall-clock
+    // animation stand instead.
+    stubAskFetch({
+      queryResponder: () => populatedQueryResponse({ latency_ms: null }),
+    })
+    renderAskPage(['/ask?q_id=nq-1'])
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText('Question') as HTMLInputElement).value,
+      ).toContain('Which scientist discovered radium?'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    // Wait for the grounded answer — proves the pipeline completed end-to-end
+    // even with latency_ms=null (no corrective real-timing snaps fire).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('answer-text').textContent).toContain(
+          'Marie Curie discovered radium.',
+        )
+      },
+      { timeout: 4000 },
+    )
+    // Per-step displays must show wall-clock elapsed (>= MIN_STEP_MS=250),
+    // not fabricated "0 ms". Pre-fix: scheduler received {0,0,0} from the
+    // null branch and emitted onStepMs(step, 0) → all three would read "0 ms".
+    for (const name of ['retriever', 'reranker', 'generator']) {
+      const cell = screen.getByTestId(`step-time-${name}`)
+      const text = (cell.textContent ?? '').trim()
+      expect(text).not.toBe('0 ms')
+      expect(text).not.toBe('0 ms…')
+      const match = text.match(/^(\d+)\s*ms/)
+      expect(match).not.toBeNull()
+      if (match !== null) {
+        expect(Number.parseInt(match[1], 10)).toBeGreaterThan(0)
+      }
+    }
+    // Total card must also reflect wall-clock, not the fabricated 0+0+0 sum
+    // that the pre-fix code emitted via onTotalMs at realPromise.then time.
+    const totalNum = screen.getByText((_, node) =>
+      node?.classList.contains('total__num') ?? false,
+    )
+    expect(totalNum.textContent).not.toBe('0.00')
+  })
+
   it('sends generation_provider in the request body', async () => {
     const fetchMock = stubAskFetch()
     renderAskPage(['/ask?q_id=nq-1'])
