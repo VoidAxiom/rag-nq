@@ -694,7 +694,7 @@ html[data-style="holo"][data-palette="holo-oilslick"] {
   border: var(--border-width-card) solid var(--border-base);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: 16px;
   min-width: 180px;
   cursor: pointer;
 }
@@ -711,6 +711,11 @@ html[data-style="holo"][data-palette="holo-oilslick"] {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+.theme-page.theme-page--header {
+  min-height: 0;
 }
 @media (min-width: 768px) {
   .theme-page { --theme-page-pad: 32px; }
