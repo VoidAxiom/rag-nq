@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import sys
+import types
+from collections.abc import Sequence
+
 import pytest
+import torch
 
 from src.models.query_schemas import PassageHit
-from src.retrieval.rerank import build_rerank_input, dedupe_hits, rerank_hits
+from src.retrieval import rerank
+from src.retrieval.rerank import (
+    build_default_cross_encoder,
+    build_rerank_input,
+    dedupe_hits,
+    rerank_hits,
+)
 
 
 class FakeCrossEncoder:
@@ -20,6 +31,16 @@ class FakeCrossEncoderWithProgressFlag:
         return [10.0 if "better" in passage else 1.0 for _query, passage in pairs]
 
 
+class RecordingCrossEncoder:
+    def __init__(self, model_name: str, *args: object, **kwargs: object) -> None:
+        self.model_name = model_name
+        self.args = args
+        self.kwargs = kwargs
+
+    def predict(self, pairs: Sequence[tuple[str, str]]) -> list[float]:
+        return [0.0 for _pair in pairs]
+
+
 def test_build_rerank_input_prefers_bounded_context_text() -> None:
     hit = PassageHit(
         point_id="p1",
@@ -29,6 +50,75 @@ def test_build_rerank_input_prefers_bounded_context_text() -> None:
     )
 
     assert build_rerank_input(hit, context_token_budget=3) == "Title: Doc\none two three"
+
+
+def test_build_default_cross_encoder_uses_mps_fp16_on_apple_silicon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rerank, "_is_apple_silicon", lambda: True)
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(CrossEncoder=RecordingCrossEncoder),
+    )
+
+    model = build_default_cross_encoder("cross-encoder/test")
+
+    assert isinstance(model, RecordingCrossEncoder)
+    assert model.model_name == "cross-encoder/test"
+    assert model.args == ()
+    assert model.kwargs == {
+        "device": "mps",
+        "model_kwargs": {"torch_dtype": torch.float16},
+    }
+
+
+def test_build_default_cross_encoder_falls_back_to_bare_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rerank, "_is_apple_silicon", lambda: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(CrossEncoder=RecordingCrossEncoder),
+    )
+
+    model = build_default_cross_encoder("cross-encoder/test")
+
+    assert isinstance(model, RecordingCrossEncoder)
+    assert model.model_name == "cross-encoder/test"
+    assert model.args == ()
+    assert model.kwargs == {}
+
+
+def test_is_apple_silicon_returns_false_when_torch_unimportable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "torch", None)
+
+    assert rerank._is_apple_silicon() is False
+
+
+def test_is_apple_silicon_returns_false_when_mps_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_torch = types.SimpleNamespace(backends=types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert rerank._is_apple_silicon() is False
+
+
+def test_is_apple_silicon_returns_false_when_mps_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_torch = types.SimpleNamespace(
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert rerank._is_apple_silicon() is False
 
 
 def test_rerank_hits_orders_by_cross_encoder_score() -> None:
