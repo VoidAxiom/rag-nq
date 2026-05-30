@@ -27,6 +27,12 @@ class FakeRetriever:
             )
         ][:top_k]
 
+    def retrieve_with_metrics(
+        self, query: str, top_k: int
+    ) -> tuple[list[PassageHit], RetrievalMetrics | None]:
+        hits = self.retrieve(query, top_k)
+        return hits, self.last_retrieval_metrics
+
 
 class FakeGenerator:
     def generate(self, query: str, hits: list[PassageHit]) -> GroundedAnswer:
@@ -148,6 +154,9 @@ def test_retrieve_endpoint_maps_runtime_failures_to_503(tmp_path: Path) -> None:
         return SimpleNamespace(
             last_retrieval_metrics=None,
             retrieve=lambda query, top_k: (_ for _ in ()).throw(RuntimeError("qdrant down")),
+            retrieve_with_metrics=lambda query, top_k: (_ for _ in ()).throw(
+                RuntimeError("qdrant down")
+            ),
         )
 
     client = _client(tmp_path, retriever_factory=failing_retriever_factory)
