@@ -1,11 +1,5 @@
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import type { ChangeEvent } from 'react'
+
 import type { CollectionChoice } from '@/lib/types'
 
 interface CollectionSelectorProps {
@@ -25,9 +19,9 @@ export function CollectionSelector({
   onChange,
   onBenchmarkChange,
 }: CollectionSelectorProps) {
-  function handleValueChange(collection: string): void {
+  function handleChange(event: ChangeEvent<HTMLSelectElement>) {
+    const collection = event.target.value
     onChange(collection)
-
     const selected = choices.find((choice) => choice.collection === collection)
     if (selected !== undefined) {
       onBenchmarkChange?.(selected.benchmark)
@@ -35,28 +29,22 @@ export function CollectionSelector({
   }
 
   return (
-    <div className="grid gap-2">
-      <Label id="ask-collection-label">Collection</Label>
-      <Select
-        value={value}
-        onValueChange={handleValueChange}
-        disabled={choices.length === 0}
-      >
-        <SelectTrigger
-          aria-labelledby="ask-collection-label"
-          className="w-full justify-between"
-        >
-          <SelectValue placeholder="Select a collection" />
-        </SelectTrigger>
-        <SelectContent>
-          {choices.map((choice) => (
-            <SelectItem value={choice.collection} key={choice.collection}>
-              {formatCollectionLabel(choice)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <select
+      className="knob-control"
+      aria-label="Collection"
+      value={value}
+      onChange={handleChange}
+      disabled={choices.length === 0}
+    >
+      {choices.length === 0 ? (
+        <option value="">No collections</option>
+      ) : null}
+      {choices.map((choice) => (
+        <option value={choice.collection} key={choice.collection}>
+          {formatCollectionLabel(choice)}
+        </option>
+      ))}
+    </select>
   )
 }
 
