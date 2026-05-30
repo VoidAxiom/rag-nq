@@ -83,6 +83,14 @@ export function runPipelineAnimation(opts: SchedulerOptions): Promise<void> {
         // resolve-time snap fires first, it sets totalSnapped to short-circuit
         // this branch.
         if (!totalSnapped) {
+          // Stop the wall-clock total ticker BEFORE emitting the real-sum
+          // snap; otherwise a queued tickTotal can fire after the snap and
+          // overwrite the Total card with the animation's wall-clock value
+          // instead of the real API sum (fast-API early-arrival regression).
+          if (totalTickHandle !== null) {
+            clearTimer(totalTickHandle)
+            totalTickHandle = null
+          }
           totalSnapped = true
           opts.callbacks.onTotalMs(
             Math.round(resolved.retriever + resolved.reranker + resolved.generator),

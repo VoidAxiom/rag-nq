@@ -286,6 +286,68 @@ describe('runPipelineAnimation', () => {
     expect(events.totalMs[events.totalMs.length - 1]).toBe(120)
   })
 
+  it('snaps Total to real sum on fast-API early arrival and stops ticking after snap', async () => {
+    // Regression for the round-5 codex finding: when /api/query resolves
+    // BEFORE the 3-step animation finishes (fast-API path), the early-
+    // arrival branch in realPromise.then emits onTotalMs(real_sum) and sets
+    // totalSnapped = true. But the wall-clock tickTotal interval kept
+    // firing, so subsequent ticks overwrote the snap with the (longer)
+    // animation duration. The fix clears totalTickHandle BEFORE setting
+    // totalSnapped. This test fails on the pre-fix code and passes on the
+    // post-fix code.
+    const clock = makeFakeClock()
+    const events: RecordedEvents = {
+      stepStates: [],
+      stepMs: [],
+      bridges: [],
+      totalMs: [],
+    }
+    // Real sum = 15ms, far smaller than the ~750ms animation wall-clock.
+    const realPromise = Promise.resolve({
+      retriever: 5,
+      reranker: 5,
+      generator: 5,
+    })
+
+    const done = runPipelineAnimation({
+      realTimings: realPromise,
+      now: () => clock.now(),
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      callbacks: {
+        onStepState(step, state) {
+          events.stepStates.push({ step, state })
+        },
+        onStepMs(step, ms) {
+          events.stepMs.push({ step, ms })
+        },
+        onBridgeState(idx, state) {
+          events.bridges.push({ idx, state })
+        },
+        onTotalMs(ms) {
+          events.totalMs.push(ms)
+        },
+      },
+    })
+
+    // Flush past the full animation (3 * MIN_STEP_MS = 750ms) plus headroom.
+    for (let t = 0; t <= MIN_STEP_MS * 4; t += 25) {
+      clock.advanceTo(t)
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    await done
+
+    // The real sum (5 + 5 + 5 = 15) must be the FINAL onTotalMs value.
+    // Pre-fix: a tickTotal queued after the snap fires with a wall-clock
+    // value like 33 / 66 / ... / 750, overwriting the 15.
+    expect(events.totalMs.length).toBeGreaterThan(0)
+    expect(events.totalMs[events.totalMs.length - 1]).toBe(15)
+    // Strict invariant: no onTotalMs call fires AFTER the snap to 15. The
+    // last occurrence of 15 in the stream must be the last index overall.
+    expect(events.totalMs.lastIndexOf(15)).toBe(events.totalMs.length - 1)
+  })
+
   it('rejects if real timings reject', async () => {
     const clock = makeFakeClock()
     const realPromise = Promise.reject(new Error('boom'))
