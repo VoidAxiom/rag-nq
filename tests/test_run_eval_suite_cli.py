@@ -18,6 +18,11 @@ class FakeRetriever:
         del query, top_k
         return [PassageHit(point_id="p1", text="Evidence p1")]
 
+    def retrieve_with_metrics(
+        self, query: str, top_k: int
+    ) -> tuple[list[PassageHit], RetrievalMetrics]:
+        return self.retrieve(query, top_k), self.last_retrieval_metrics
+
 
 class FakeGenerator:
     def generate(self, query: str, hits: list[PassageHit]) -> GroundedAnswer:

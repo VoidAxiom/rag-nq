@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from inspect import Parameter, signature
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol, cast
@@ -230,6 +231,26 @@ class QdrantModeRetriever:
     sparse: Retriever | None = None
     hybrid: Retriever | None = None
     last_retrieval_metrics: RetrievalMetrics | None = None
+    eager_init: bool = False
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        if not self.eager_init:
+            return
+        if self.mode == "dense" and self.dense is None:
+            self.dense = DenseQdrantRetriever(settings=self.settings)
+        elif self.mode == "sparse" and self.sparse is None:
+            self.sparse = SparseQdrantRetriever(settings=self.settings)
+        elif self.mode == "hybrid" and self.hybrid is None:
+            if self.dense is None:
+                self.dense = DenseQdrantRetriever(settings=self.settings)
+            if self.sparse is None:
+                self.sparse = SparseQdrantRetriever(settings=self.settings)
+            self.hybrid = HybridQdrantRetriever(
+                settings=self.settings, dense=self.dense, sparse=self.sparse,
+            )
 
     def retrieve(self, query: str, top_k: int) -> list[PassageHit]:
         if self.mode == "dense":
@@ -259,6 +280,22 @@ class QdrantModeRetriever:
             )
             return hits
         raise ValueError(f"Unsupported retrieval mode {self.mode!r}.")
+
+    def retrieve_with_metrics(
+        self, query: str, top_k: int
+    ) -> tuple[list[PassageHit], RetrievalMetrics | None]:
+        """Race-free retrieve: returns (hits, metrics_snapshot) atomically.
+
+        Required by ``app/api/main.py`` request handlers which use a
+        cached ``QdrantModeRetriever`` singleton hit by FastAPI's
+        threadpool. The per-instance lock serializes concurrent
+        retrieves against the same singleton so each caller gets the
+        metrics produced by its own retrieve() call.
+        """
+        with self._lock:
+            hits = self.retrieve(query, top_k)
+            metrics = self.last_retrieval_metrics
+        return hits, metrics
 
     def _retrieve_single_mode(
         self, retriever: Retriever, *, query: str, top_k: int

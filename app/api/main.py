@@ -101,6 +101,11 @@ class ApiRetriever(Protocol):
     def retrieve(self, query: str, top_k: int) -> list[PassageHit]:
         """Return retrieved passage hits."""
 
+    def retrieve_with_metrics(
+        self, query: str, top_k: int
+    ) -> tuple[list[PassageHit], RetrievalMetrics | None]:
+        """Return (hits, metrics_snapshot) atomically. Used by handlers."""
+
 
 class ApiGenerator(Protocol):
     """Grounded generator interface used by API endpoints and tests."""
@@ -126,8 +131,50 @@ def create_app(
 
     setup_logging()
     app_settings = settings or Settings.from_env()
-    make_retriever = retriever_factory or _default_retriever_factory
-    make_generator = generator_factory or _default_generator_factory
+    if retriever_factory is None:
+        _retriever_cache: dict[tuple[object, ...], ApiRetriever] = {}
+        _retriever_lock = threading.Lock()
+
+        def _cached_retriever(s: Settings, mode: Mode) -> ApiRetriever:
+            key = (
+                mode,
+                s.embedder_name,
+                s.qdrant_collection,
+                s.qdrant_url,
+                s.rerank_enabled,
+                s.rerank_model_name,
+            )
+            with _retriever_lock:
+                inst = _retriever_cache.get(key)
+                if inst is None:
+                    inst = _default_retriever_factory(s, mode)
+                    _retriever_cache[key] = inst
+                return inst
+
+        make_retriever = _cached_retriever
+    else:
+        make_retriever = retriever_factory
+
+    if generator_factory is None:
+        _generator_cache: dict[tuple[object, ...], ApiGenerator] = {}
+        _generator_lock = threading.Lock()
+
+        def _cached_generator(s: Settings) -> ApiGenerator:
+            key = (
+                s.generation_provider,
+                s.generation_model_name,
+            )
+            with _generator_lock:
+                inst = _generator_cache.get(key)
+                if inst is None:
+                    inst = _default_generator_factory(s)
+                    _generator_cache[key] = inst
+                return inst
+
+        make_generator = _cached_generator
+    else:
+        make_generator = generator_factory
+
     suites_dir = app_settings.output_dir / "eval_suites"
     registry = run_registry if run_registry is not None else get_registry()
 
@@ -136,6 +183,11 @@ def create_app(
         version="0.1.0",
         description="Local API for retrieval diagnostics and grounded RAG queries.",
     )
+    if retriever_factory is None and generator_factory is None:
+        app.state._retriever_cache = _retriever_cache
+        app.state._generator_cache = _generator_cache
+        app.state._cached_retriever_fn = _cached_retriever
+        app.state._cached_generator_fn = _cached_generator
 
     dist_path_env = os.environ.get("RAG_WEB_DIST_PATH")
     dist_path = Path(dist_path_env).expanduser().resolve() if dist_path_env else None
@@ -168,11 +220,13 @@ def create_app(
         started_at = time.monotonic()
         try:
             retriever = make_retriever(app_settings, request.mode)
-            hits = retriever.retrieve(request.query, top_k=request.top_k)
+            hits, raw_metrics = retriever.retrieve_with_metrics(
+                request.query, top_k=request.top_k
+            )
         except Exception as exc:
             LOGGER.exception("retrieval failed mode=%s", request.mode)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        metrics = retriever.last_retrieval_metrics or RetrievalMetrics()
+        metrics = raw_metrics or RetrievalMetrics()
         LOGGER.info(
             "retrieve complete mode=%s top_k=%s hits=%s elapsed_seconds=%.3f",
             request.mode,
@@ -193,12 +247,14 @@ def create_app(
         retrieval_started_at = time.monotonic()
         try:
             retriever = make_retriever(effective_settings, request.mode)
-            hits = retriever.retrieve(request.query, top_k=request.top_k)
+            hits, raw_metrics = retriever.retrieve_with_metrics(
+                request.query, top_k=request.top_k
+            )
         except Exception as exc:
             LOGGER.exception("retrieval failed mode=%s", request.mode)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         retrieval_wall_ms = (time.monotonic() - retrieval_started_at) * 1000.0
-        retrieval_metrics = retriever.last_retrieval_metrics or RetrievalMetrics()
+        retrieval_metrics = raw_metrics or RetrievalMetrics()
         retrieval_ms, rerank_ms = _retrieval_latency_ms(retrieval_metrics, retrieval_wall_ms)
 
         grounded: GroundedAnswer | None = None
@@ -728,7 +784,23 @@ def _safe_url(value: str) -> str:
 
 
 def _default_retriever_factory(settings: Settings, mode: Mode) -> ApiRetriever:
-    return QdrantModeRetriever(settings=settings, mode=mode)
+    return QdrantModeRetriever(settings=settings, mode=mode, eager_init=True)
+
+
+def _factory_cache_for_test(
+    app: FastAPI,
+) -> tuple[
+    Callable[[Settings, Mode], ApiRetriever],
+    Callable[[Settings], ApiGenerator],
+]:
+    """Test-only accessor: returns (cached_retriever_fn, cached_generator_fn).
+
+    Returns the closure wrappers stored on ``app.state`` by
+    ``create_app`` when both default factories are in effect.
+    Raises ``AttributeError`` if the caller injected an explicit
+    factory (no cache is installed in that case).
+    """
+    return app.state._cached_retriever_fn, app.state._cached_generator_fn
 
 
 def _default_generator_factory(settings: Settings) -> ApiGenerator:

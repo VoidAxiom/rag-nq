@@ -27,6 +27,11 @@ class FakeRetriever:
             for point_id in self.hits_by_query[query][:top_k]
         ]
 
+    def retrieve_with_metrics(
+        self, query: str, top_k: int
+    ) -> tuple[list[PassageHit], RetrievalMetrics]:
+        return self.retrieve(query, top_k), self.last_retrieval_metrics
+
 
 class FakeGenerator:
     def __init__(self, answers_by_query: dict[str, str]) -> None:
