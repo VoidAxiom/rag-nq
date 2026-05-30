@@ -661,6 +661,9 @@ html[data-style="holo"][data-palette="holo-oilslick"] {
 
 .theme-app {
   min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   color: var(--text);
   background: var(--bg-image, none), var(--bg);
   background-attachment: fixed;
@@ -705,17 +708,18 @@ html[data-style="holo"][data-palette="holo-oilslick"] {
 
 .theme-page {
   --theme-page-pad: 24px;
+  width: 100%;
   max-width: 1280px;
   margin: 0 auto;
   padding: var(--theme-page-pad);
   display: flex;
   flex-direction: column;
   gap: 20px;
-  min-height: 100vh;
-  min-height: 100dvh;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .theme-page.theme-page--header {
-  min-height: 0;
+  flex: 0 0 auto;
 }
 @media (min-width: 768px) {
   .theme-page { --theme-page-pad: 32px; }
