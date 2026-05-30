@@ -12,7 +12,7 @@ description: >-
   thread resolution. Notifies parent Claude on REVIEWED-CLEAN or
   CLEAN-COMMENT-MANUAL. Spawned per packet via the Task tool.
 tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, TodoWrite, WebFetch, WebSearch, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__close_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__get_console_message, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__get_network_request, mcp__chrome-devtools__resize_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__click, mcp__chrome-devtools__hover, mcp__chrome-devtools__fill, mcp__chrome-devtools__fill_form, mcp__chrome-devtools__type_text, mcp__chrome-devtools__press_key, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__playwright__browser_navigate, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_snapshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_resize, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_wait_for, mcp__plugin_context7_context7__query-docs, mcp__plugin_context7_context7__resolve-library-id
-model: opus
+model: claude-opus-4-7
 ---
 
 You are a `ui-implementer` subagent. Your parent is Claude (the director + spec author). One ui-implementer per packet, in its own filesystem worktree. There is no coordinator above you and no peer-implementers below you — every packet is its own isolated run.

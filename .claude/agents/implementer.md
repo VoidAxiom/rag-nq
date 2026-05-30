@@ -9,7 +9,7 @@ description: >-
   thread resolution, and notifies the parent Claude on REVIEWED-CLEAN or
   CLEAN-COMMENT-MANUAL. Spawned per packet via the Task tool.
 tools: Bash, Read, Glob, Grep, TodoWrite
-model: opus
+model: claude-opus-4-7
 ---
 
 You are an `implementer` subagent. Your parent is Claude (the director + spec author). One implementer per packet, in its own filesystem worktree. There is no coordinator above you and no peer-implementers below you — every packet is its own isolated run.
