@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import json
 import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import TypeAdapter, ValidationError
 from starlette.staticfiles import StaticFiles
 
 from app.api.schemas import (
     AddEntryRequest,
     ArtifactStatus,
+    BenchmarkComboSettings,
+    BenchmarkStreamRequest,
     CollectionChoice,
     ComponentChoice,
     ComponentsResponse,
@@ -44,6 +48,15 @@ from app.api.schemas import (
 from src.config.settings import Settings
 from src.evaluation import eval_suite
 from src.evaluation import scoreboard as scoreboard_module
+from src.evaluation.benchmark_runner import (
+    ComboRunResult,
+    QuestionInput,
+    compute_running_aggregates,
+    load_eval_questions,
+    resolve_questions,
+    run_single_question,
+    settings_for_combo,
+)
 from src.evaluation.eval_suite_registry import EvalSuiteRegistry, RunStatus, get_registry
 from src.evaluation.eval_suite_runner import run_suite
 from src.evaluation.per_query_metrics import (
@@ -143,6 +156,7 @@ def create_app(
                 s.qdrant_url,
                 s.rerank_enabled,
                 s.rerank_model_name,
+                s.retrieve_k,
             )
             with _retriever_lock:
                 inst = _retriever_cache.get(key)
@@ -508,6 +522,37 @@ def create_app(
         path = scoreboard_path_factory() if scoreboard_path_factory else SCOREBOARD_PATH
         return load_scoreboard(path)
 
+    @app.post("/api/benchmark/stream")
+    async def benchmark_stream(request: BenchmarkStreamRequest) -> StreamingResponse:
+        if any(combo.generation_provider == "openai" for combo in request.combos):
+            openai_enabled, _disabled_reason = _openai_availability()
+            if not openai_enabled:
+                raise HTTPException(status_code=422, detail=OPENAI_OVERRIDE_ERROR)
+
+        eval_questions_dir = app_settings.output_dir / "eval_questions"
+
+        def _suite_loader(suite_id: str):
+            return eval_suite.load_suite(suite_id, suites_dir)
+
+        def _questions_loader(benchmark: str) -> list[QuestionInput]:
+            return load_eval_questions(benchmark, eval_questions_dir=eval_questions_dir)
+
+        return StreamingResponse(
+            _run_benchmark(
+                request,
+                app_settings=app_settings,
+                retriever_factory=make_retriever,
+                generator_factory=make_generator,
+                suite_loader=_suite_loader,
+                eval_questions_loader=_questions_loader,
+            ),
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+            media_type="text/event-stream",
+        )
+
     if spa_enabled and dist_path is not None:
         assets_path = dist_path / "assets"
         if assets_path.is_dir():
@@ -540,6 +585,218 @@ def create_app(
             return Response(status_code=404)
 
     return app
+
+
+async def _run_benchmark(
+    request: BenchmarkStreamRequest,
+    *,
+    app_settings: Settings,
+    retriever_factory,
+    generator_factory,
+    suite_loader,
+    eval_questions_loader,
+) -> AsyncIterator[str]:
+    run_id = uuid4().hex
+    run_started_at = time.perf_counter()
+
+    try:
+        resolved = resolve_questions(
+            request.question_set,
+            suite_loader=suite_loader,
+            eval_questions_loader=eval_questions_loader,
+        )
+        questions = resolved.questions
+        stream_collection = (
+            resolved.collection_override
+            if resolved.collection_override is not None
+            else _collection_for_benchmark(resolved.benchmark, app_settings)
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.exception("benchmark question-set resolution failed")
+        yield _sse_event(
+            "started",
+            {
+                "run_id": run_id,
+                "total_questions": 0,
+                "combo_ids": [c.id for c in request.combos],
+            },
+        )
+        yield _sse_event(
+            "error",
+            {
+                "combo_id": None,
+                "question_index": None,
+                "message": str(exc),
+            },
+        )
+        yield _sse_event(
+            "done",
+            {
+                "run_id": run_id,
+                "duration_ms": (time.perf_counter() - run_started_at) * 1000.0,
+            },
+        )
+        return
+
+    yield _sse_event(
+        "started",
+        {
+            "run_id": run_id,
+            "total_questions": len(questions),
+            "combo_ids": [c.id for c in request.combos],
+        },
+    )
+
+    queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+    completed_results: dict[str, list[ComboRunResult]] = {c.id: [] for c in request.combos}
+
+    async def _combo_task(combo: BenchmarkComboSettings) -> None:
+        last_question_index: int | None = None
+        last_emitted_completed_count: int | None = None
+        try:
+            settings = settings_for_combo(app_settings, combo).model_copy(
+                update={"qdrant_collection": stream_collection}
+            )
+            for i, q in enumerate(questions):
+                last_question_index = i
+                await queue.put(
+                    (
+                        "question_started",
+                        {"combo_id": combo.id, "question_index": i, "query": q.query},
+                    )
+                )
+                result = await asyncio.to_thread(
+                    run_single_question,
+                    combo=combo,
+                    settings=settings,
+                    question=q,
+                    question_index=i,
+                    retriever_factory=retriever_factory,
+                    generator_factory=generator_factory,
+                )
+                completed_results[combo.id].append(result)
+                await queue.put(("result", _result_event_payload(result)))
+                aggregate = compute_running_aggregates(completed_results[combo.id])
+                completed_count = len(completed_results[combo.id])
+                await queue.put(
+                    (
+                        "combo_aggregate",
+                        {
+                            "combo_id": combo.id,
+                            "completed_count": completed_count,
+                            "total_count": len(questions),
+                            "running_metrics": aggregate,
+                        },
+                    )
+                )
+                last_emitted_completed_count = completed_count
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("benchmark combo failed combo_id=%s", combo.id)
+            completed_count = len(completed_results[combo.id])
+            if completed_count > 0 and completed_count != last_emitted_completed_count:
+                try:
+                    aggregate = compute_running_aggregates(completed_results[combo.id])
+                except Exception:
+                    LOGGER.exception(
+                        "benchmark combo aggregate-recovery failed combo_id=%s",
+                        combo.id,
+                    )
+                else:
+                    await queue.put(
+                        (
+                            "combo_aggregate",
+                            {
+                                "combo_id": combo.id,
+                                "completed_count": completed_count,
+                                "total_count": len(questions),
+                                "running_metrics": aggregate,
+                            },
+                        )
+                    )
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "combo_id": combo.id,
+                        "question_index": last_question_index,
+                        "message": str(exc),
+                    },
+                )
+            )
+
+    tasks = [asyncio.create_task(_combo_task(c)) for c in request.combos]
+    try:
+        while True:
+            all_done = all(t.done() for t in tasks)
+            if all_done and queue.empty():
+                break
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=0.5)
+                yield _sse_event(*event)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("benchmark combo cleanup raised unexpectedly")
+
+    yield _sse_event(
+        "done",
+        {
+            "run_id": run_id,
+            "duration_ms": (time.perf_counter() - run_started_at) * 1000.0,
+        },
+    )
+
+
+def _sse_event(event_type: str, payload: dict) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _result_event_payload(result: ComboRunResult) -> dict:
+    return {
+        "combo_id": result.combo_id,
+        "question_index": result.question_index,
+        "query": result.query,
+        "grounded": result.grounded.model_dump(mode="json") if result.grounded else None,
+        "retrieved_passages": [
+            hit.model_dump(mode="json") for hit in result.retrieved_passages
+        ],
+        "metrics": {
+            "recall_at_1": result.metrics.recall_at_1,
+            "recall_at_5": result.metrics.recall_at_5,
+            "recall_at_10": result.metrics.recall_at_10,
+            "mrr_at_10": result.metrics.mrr_at_10,
+            "ndcg_at_10": result.metrics.ndcg_at_10,
+            "em": result.metrics.em,
+            "f1": result.metrics.f1,
+        },
+        "latency_ms": {
+            "retrieval_ms": result.latency_ms.retrieval_ms,
+            "rerank_ms": result.latency_ms.rerank_ms,
+            "generation_ms": result.latency_ms.generation_ms,
+            "total_ms": result.latency_ms.total_ms,
+        },
+    }
+
+
+def _collection_for_benchmark(benchmark: str, app_settings: Settings) -> str:
+    if benchmark == "nq":
+        return app_settings.qdrant_collection
+    if benchmark == "hotpotqa":
+        return HOTPOTQA_COLLECTION
+    if benchmark == "2wikimhqa":
+        return TWOWIKIMHQA_COLLECTION
+    if benchmark == "musique":
+        return MUSIQUE_COLLECTION
+    raise ValueError(f"unknown benchmark {benchmark!r}")
 
 
 def _suite_summary(suite: eval_suite.EvalSuite) -> SuiteSummary:
