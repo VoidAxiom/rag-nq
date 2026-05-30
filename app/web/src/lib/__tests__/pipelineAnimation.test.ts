@@ -66,154 +66,48 @@ function makeFakeClock(): FakeClock {
 }
 
 interface RecordedEvents {
-  stepStates: Array<{ step: StepId; state: StepState }>
-  stepMs: Array<{ step: StepId; ms: number }>
-  bridges: Array<{ idx: 0 | 1; state: BridgeState }>
-  totalMs: number[]
+  stepStates: Array<{ at: number; step: StepId; state: StepState }>
+  stepMs: Array<{ at: number; step: StepId; ms: number }>
+  bridges: Array<{ at: number; idx: 0 | 1; state: BridgeState }>
+  totalMs: Array<{ at: number; ms: number }>
 }
 
-describe('runPipelineAnimation', () => {
-  it('marks every step complete in order and snaps to real timings', async () => {
+function recordEvents(clock: FakeClock): { events: RecordedEvents; callbacks: Parameters<typeof runPipelineAnimation>[0]['callbacks'] } {
+  const events: RecordedEvents = {
+    stepStates: [],
+    stepMs: [],
+    bridges: [],
+    totalMs: [],
+  }
+  const callbacks = {
+    onStepState(step: StepId, state: StepState) {
+      events.stepStates.push({ at: clock.now(), step, state })
+    },
+    onStepMs(step: StepId, ms: number) {
+      events.stepMs.push({ at: clock.now(), step, ms })
+    },
+    onBridgeState(idx: 0 | 1, state: BridgeState) {
+      events.bridges.push({ at: clock.now(), idx, state })
+    },
+    onTotalMs(ms: number) {
+      events.totalMs.push({ at: clock.now(), ms })
+    },
+  }
+  return { events, callbacks }
+}
+
+async function tick(): Promise<void> {
+  // Drain microtasks (Promise chains) at least twice so the scheduler's
+  // realPromise.then handlers run before the next clock advance.
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
+describe('runPipelineAnimation (amended VOI-368 r2)', () => {
+  // T1 — Total keeps ticking while no step shows a number.
+  it('T1: Total ticks during the wait; no per-step onStepMs fires until response', async () => {
     const clock = makeFakeClock()
-    const events: RecordedEvents = {
-      stepStates: [],
-      stepMs: [],
-      bridges: [],
-      totalMs: [],
-    }
-    const realPromise = Promise.resolve({
-      retriever: 400,
-      reranker: 300,
-      generator: 100,
-    })
-
-    const done = runPipelineAnimation({
-      realTimings: realPromise,
-      now: () => clock.now(),
-      setTimeoutFn: clock.setTimeoutFn,
-      clearTimeoutFn: clock.clearTimeoutFn,
-      callbacks: {
-        onStepState(step, state) {
-          events.stepStates.push({ step, state })
-        },
-        onStepMs(step, ms) {
-          events.stepMs.push({ step, ms })
-        },
-        onBridgeState(idx, state) {
-          events.bridges.push({ idx, state })
-        },
-        onTotalMs(ms) {
-          events.totalMs.push(ms)
-        },
-      },
-    })
-
-    // Flush all timers and microtasks across the simulated span.
-    for (let t = 0; t <= 2500; t += 50) {
-      clock.advanceTo(t)
-      // Let queued microtasks resolve (the scheduler chains Promises).
-      await Promise.resolve()
-      await Promise.resolve()
-    }
-    await done
-
-    // Order: retriever running → complete, then reranker, then generator.
-    const stateOrder = events.stepStates.map((e) => `${e.step}:${e.state}`)
-    expect(stateOrder).toEqual([
-      'retriever:running',
-      'retriever:complete',
-      'reranker:running',
-      'reranker:complete',
-      'generator:running',
-      'generator:complete',
-    ])
-    // Bridges flowed then completed.
-    expect(events.bridges.find((b) => b.idx === 0 && b.state === 'flowing')).toBeDefined()
-    expect(events.bridges.find((b) => b.idx === 0 && b.state === 'complete')).toBeDefined()
-    expect(events.bridges.find((b) => b.idx === 1 && b.state === 'flowing')).toBeDefined()
-    expect(events.bridges.find((b) => b.idx === 1 && b.state === 'complete')).toBeDefined()
-    // Final ms per step is the real ms (last onStepMs per step).
-    const lastByStep = new Map<StepId, number>()
-    for (const e of events.stepMs) lastByStep.set(e.step, e.ms)
-    expect(lastByStep.get('retriever')).toBe(400)
-    expect(lastByStep.get('reranker')).toBe(300)
-    expect(lastByStep.get('generator')).toBe(100)
-  })
-
-  it('honors MIN_STEP_MS floor even when the real step is fast', async () => {
-    const clock = makeFakeClock()
-    const events: RecordedEvents = {
-      stepStates: [],
-      stepMs: [],
-      bridges: [],
-      totalMs: [],
-    }
-    // Fast real timings — sub-MIN_STEP_MS — must still take >=MIN_STEP_MS each.
-    const realPromise = Promise.resolve({
-      retriever: 5,
-      reranker: 5,
-      generator: 5,
-    })
-
-    const done = runPipelineAnimation({
-      realTimings: realPromise,
-      now: () => clock.now(),
-      setTimeoutFn: clock.setTimeoutFn,
-      clearTimeoutFn: clock.clearTimeoutFn,
-      callbacks: {
-        onStepState(step, state) {
-          events.stepStates.push({ step, state })
-        },
-        onStepMs(step, ms) {
-          events.stepMs.push({ step, ms })
-        },
-        onBridgeState(idx, state) {
-          events.bridges.push({ idx, state })
-        },
-        onTotalMs(ms) {
-          events.totalMs.push(ms)
-        },
-      },
-    })
-
-    // Animation needs at least 3 * MIN_STEP_MS = 750ms total.
-    // Advance just past MIN_STEP_MS — only retriever should be complete.
-    clock.advanceTo(MIN_STEP_MS - 1)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(events.stepStates.filter((e) => e.state === 'complete')).toHaveLength(0)
-
-    // Flush through.
-    for (let t = MIN_STEP_MS; t <= MIN_STEP_MS * 4; t += 25) {
-      clock.advanceTo(t)
-      await Promise.resolve()
-      await Promise.resolve()
-    }
-    await done
-    const completes = events.stepStates.filter((e) => e.state === 'complete')
-    expect(completes.map((e) => e.step)).toEqual([
-      'retriever',
-      'reranker',
-      'generator',
-    ])
-    // Each step's final displayed ms is the real (5), not the animation duration.
-    const lastByStep = new Map<StepId, number>()
-    for (const e of events.stepMs) lastByStep.set(e.step, e.ms)
-    expect(lastByStep.get('retriever')).toBe(5)
-    expect(lastByStep.get('reranker')).toBe(5)
-    expect(lastByStep.get('generator')).toBe(5)
-  })
-
-  it('advances through steps when real timings are slow to arrive', async () => {
-    const clock = makeFakeClock()
-    const events: RecordedEvents = {
-      stepStates: [],
-      stepMs: [],
-      bridges: [],
-      totalMs: [],
-    }
-    // Real timings only resolve after ~2000ms — well past 3 * MIN_STEP_MS.
-    // This simulates a slow /api/query (e.g. a 2-second openai generator).
+    const { events, callbacks } = recordEvents(clock)
     let resolveReal: (t: { retriever: number; reranker: number; generator: number }) => void = () => undefined
     const realPromise = new Promise<{
       retriever: number
@@ -228,85 +122,158 @@ describe('runPipelineAnimation', () => {
       now: () => clock.now(),
       setTimeoutFn: clock.setTimeoutFn,
       clearTimeoutFn: clock.clearTimeoutFn,
-      callbacks: {
-        onStepState(step, state) {
-          events.stepStates.push({ step, state })
-        },
-        onStepMs(step, ms) {
-          events.stepMs.push({ step, ms })
-        },
-        onBridgeState(idx, state) {
-          events.bridges.push({ idx, state })
-        },
-        onTotalMs(ms) {
-          events.totalMs.push(ms)
-        },
-      },
+      callbacks,
     })
 
-    // Advance past 3 * MIN_STEP_MS without resolving realTimings. The
-    // animation must STILL advance: regression for the "stalled retriever
-    // while API in flight" bug codex flagged on PR #32.
-    for (let t = 0; t <= MIN_STEP_MS * 4; t += 25) {
+    // Walk to t=5000 in 100ms steps without resolving realPromise.
+    for (let t = 0; t <= 5000; t += 100) {
       clock.advanceTo(t)
-      await Promise.resolve()
-      await Promise.resolve()
+      await tick()
     }
-    const completesBeforeReal = events.stepStates.filter(
-      (e) => e.state === 'complete',
-    )
-    // All three steps should have moved through 'running' → 'complete' purely
-    // on MIN_STEP_MS pacing, BEFORE the real timings resolved.
-    expect(completesBeforeReal.map((e) => e.step)).toEqual([
-      'retriever',
-      'reranker',
-      'generator',
-    ])
+    // Pre-resolve: NO onStepMs calls fired for any step.
+    expect(events.stepMs).toHaveLength(0)
+    // Total fired repeatedly, monotonically non-decreasing.
+    expect(events.totalMs.length).toBeGreaterThan(20)
+    for (let i = 1; i < events.totalMs.length; i++) {
+      expect(events.totalMs[i].ms).toBeGreaterThanOrEqual(events.totalMs[i - 1].ms)
+    }
+    // Total grew past 1000 (1.00s boundary) and past 3000 (3.00s boundary).
+    expect(events.totalMs.some((e) => e.ms >= 1000)).toBe(true)
+    expect(events.totalMs.some((e) => e.ms >= 3000)).toBe(true)
 
-    // Now resolve realTimings with values smaller than the wall-clock; the
-    // promise should still resolve cleanly AND each step's final displayed
-    // ms must snap to the real per-step value (regression for the 'late real
-    // timings never replace placeholders' bug codex flagged on round 3).
-    resolveReal({ retriever: 50, reranker: 40, generator: 30 })
-    for (let t = MIN_STEP_MS * 4; t <= MIN_STEP_MS * 6; t += 50) {
+    // Resolve at t=5000. Walk a bit further to let snap callbacks fire.
+    resolveReal({ retriever: 100, reranker: 4700, generator: 50 })
+    for (let t = 5000; t <= 5500; t += 50) {
       clock.advanceTo(t)
-      await Promise.resolve()
-      await Promise.resolve()
+      await tick()
     }
     await done
-    const lastByStep = new Map<StepId, number>()
-    for (const e of events.stepMs) lastByStep.set(e.step, e.ms)
-    expect(lastByStep.get('retriever')).toBe(50)
-    expect(lastByStep.get('reranker')).toBe(40)
-    expect(lastByStep.get('generator')).toBe(30)
-    // The Total card must also snap to the real summed total (regression
-    // for the 'late realPromise never updates Total' bug codex flagged on
-    // round 4): the resolve-time snap inside startStep ran while timings
-    // were null, so a corrective onTotalMs must fire when realPromise lands.
-    expect(events.totalMs[events.totalMs.length - 1]).toBe(120)
+
+    // Post-resolve: each step got exactly one onStepMs call carrying its real ms.
+    const stepMsByStep = new Map<StepId, number[]>()
+    for (const e of events.stepMs) {
+      const arr = stepMsByStep.get(e.step) ?? []
+      arr.push(e.ms)
+      stepMsByStep.set(e.step, arr)
+    }
+    expect(stepMsByStep.get('retriever')).toEqual([100])
+    expect(stepMsByStep.get('reranker')).toEqual([4700])
+    expect(stepMsByStep.get('generator')).toEqual([50])
+
+    // Total's FINAL value is the real sum.
+    expect(events.totalMs[events.totalMs.length - 1].ms).toBe(4850)
   })
 
-  it('snaps Total to real sum on fast-API early arrival and stops ticking after snap', async () => {
-    // Regression for the round-5 codex finding: when /api/query resolves
-    // BEFORE the 3-step animation finishes (fast-API path), the early-
-    // arrival branch in realPromise.then emits onTotalMs(real_sum) and sets
-    // totalSnapped = true. But the wall-clock tickTotal interval kept
-    // firing, so subsequent ticks overwrote the snap with the (longer)
-    // animation duration. The fix clears totalTickHandle BEFORE setting
-    // totalSnapped. This test fails on the pre-fix code and passes on the
-    // post-fix code.
+  // T2 — Steps stay running until response.
+  it('T2: each step transitions pending→running pre-resolve; complete only post-resolve', async () => {
     const clock = makeFakeClock()
-    const events: RecordedEvents = {
-      stepStates: [],
-      stepMs: [],
-      bridges: [],
-      totalMs: [],
+    const { events, callbacks } = recordEvents(clock)
+    let resolveReal: (t: { retriever: number; reranker: number; generator: number }) => void = () => undefined
+    const realPromise = new Promise<{
+      retriever: number
+      reranker: number
+      generator: number
+    }>((res) => {
+      resolveReal = res
+    })
+
+    const done = runPipelineAnimation({
+      realTimings: realPromise,
+      now: () => clock.now(),
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      callbacks,
+    })
+
+    // Pre-resolve: walk to t=5000. No `complete` transitions should fire.
+    for (let t = 0; t <= 5000; t += 100) {
+      clock.advanceTo(t)
+      await tick()
     }
-    // Real sum = 15ms, far smaller than the ~750ms animation wall-clock.
+    const preResolveCompletes = events.stepStates.filter((e) => e.state === 'complete')
+    expect(preResolveCompletes).toHaveLength(0)
+
+    // Each step transitioned to `running` exactly once pre-resolve.
+    const runningByStep = new Map<StepId, number>()
+    for (const e of events.stepStates) {
+      if (e.state === 'running') {
+        runningByStep.set(e.step, (runningByStep.get(e.step) ?? 0) + 1)
+      }
+    }
+    expect(runningByStep.get('retriever')).toBe(1)
+    expect(runningByStep.get('reranker')).toBe(1)
+    expect(runningByStep.get('generator')).toBe(1)
+
+    // Resolve.
+    resolveReal({ retriever: 100, reranker: 4700, generator: 50 })
+    for (let t = 5000; t <= 5500; t += 50) {
+      clock.advanceTo(t)
+      await tick()
+    }
+    await done
+
+    // Post-resolve: each step transitioned to `complete` exactly once.
+    const completeByStep = new Map<StepId, number>()
+    for (const e of events.stepStates) {
+      if (e.state === 'complete') {
+        completeByStep.set(e.step, (completeByStep.get(e.step) ?? 0) + 1)
+      }
+    }
+    expect(completeByStep.get('retriever')).toBe(1)
+    expect(completeByStep.get('reranker')).toBe(1)
+    expect(completeByStep.get('generator')).toBe(1)
+  })
+
+  // T3 — Cascade transitions on schedule.
+  it('T3: cascade transitions step→running at idx * MIN_STEP_MS', async () => {
+    const clock = makeFakeClock()
+    const { events, callbacks } = recordEvents(clock)
+    let resolveReal: (t: { retriever: number; reranker: number; generator: number }) => void = () => undefined
+    const realPromise = new Promise<{
+      retriever: number
+      reranker: number
+      generator: number
+    }>((res) => {
+      resolveReal = res
+    })
+
+    runPipelineAnimation({
+      realTimings: realPromise,
+      now: () => clock.now(),
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      callbacks,
+    })
+
+    for (let t = 0; t <= MIN_STEP_MS * 3; t += 25) {
+      clock.advanceTo(t)
+      await tick()
+    }
+
+    const runningAt = new Map<StepId, number>()
+    for (const e of events.stepStates) {
+      if (e.state === 'running' && !runningAt.has(e.step)) {
+        runningAt.set(e.step, e.at)
+      }
+    }
+    expect(runningAt.get('retriever')).toBe(0)
+    expect(runningAt.get('reranker')).toBe(MIN_STEP_MS)
+    expect(runningAt.get('generator')).toBe(MIN_STEP_MS * 2)
+
+    // Resolve so the test's done promise can settle cleanly.
+    resolveReal({ retriever: 1, reranker: 1, generator: 1 })
+    await tick()
+  })
+
+  // T4 — Fast-API path snaps correctly when realPromise resolves before cascade completes.
+  it('T4: fast-API path — all steps end in complete with real ms after resolve', async () => {
+    const clock = makeFakeClock()
+    const { events, callbacks } = recordEvents(clock)
+    // Real promise that's already resolved.
     const realPromise = Promise.resolve({
-      retriever: 5,
-      reranker: 5,
-      generator: 5,
+      retriever: 30,
+      reranker: 40,
+      generator: 20,
     })
 
     const done = runPipelineAnimation({
@@ -314,58 +281,78 @@ describe('runPipelineAnimation', () => {
       now: () => clock.now(),
       setTimeoutFn: clock.setTimeoutFn,
       clearTimeoutFn: clock.clearTimeoutFn,
-      callbacks: {
-        onStepState(step, state) {
-          events.stepStates.push({ step, state })
-        },
-        onStepMs(step, ms) {
-          events.stepMs.push({ step, ms })
-        },
-        onBridgeState(idx, state) {
-          events.bridges.push({ idx, state })
-        },
-        onTotalMs(ms) {
-          events.totalMs.push(ms)
-        },
-      },
+      callbacks,
     })
 
-    // Flush past the full animation (3 * MIN_STEP_MS = 750ms) plus headroom.
-    for (let t = 0; t <= MIN_STEP_MS * 4; t += 25) {
+    // The realPromise.then handler runs on the next microtask, well before
+    // the t=MIN_STEP_MS cascade tick. Walk a bit to drain.
+    for (let t = 0; t <= 50; t += 10) {
       clock.advanceTo(t)
-      await Promise.resolve()
-      await Promise.resolve()
+      await tick()
     }
     await done
 
-    // The real sum (5 + 5 + 5 = 15) must be the FINAL onTotalMs value.
-    // Pre-fix: a tickTotal queued after the snap fires with a wall-clock
-    // value like 33 / 66 / ... / 750, overwriting the 15.
-    expect(events.totalMs.length).toBeGreaterThan(0)
-    expect(events.totalMs[events.totalMs.length - 1]).toBe(15)
-    // Strict invariant: no onTotalMs call fires AFTER the snap to 15. The
-    // last occurrence of 15 in the stream must be the last index overall.
-    expect(events.totalMs.lastIndexOf(15)).toBe(events.totalMs.length - 1)
+    // Final state per step: complete.
+    const finalState = new Map<StepId, StepState>()
+    for (const e of events.stepStates) finalState.set(e.step, e.state)
+    expect(finalState.get('retriever')).toBe('complete')
+    expect(finalState.get('reranker')).toBe('complete')
+    expect(finalState.get('generator')).toBe('complete')
+
+    // Final ms per step: real value.
+    const lastMs = new Map<StepId, number>()
+    for (const e of events.stepMs) lastMs.set(e.step, e.ms)
+    expect(lastMs.get('retriever')).toBe(30)
+    expect(lastMs.get('reranker')).toBe(40)
+    expect(lastMs.get('generator')).toBe(20)
+
+    // Total snapped to real sum.
+    expect(events.totalMs[events.totalMs.length - 1].ms).toBe(90)
   })
 
-  it('rejects if real timings reject', async () => {
+  // T5 — Error path halts everything.
+  it('T5: rejection halts onTotalMs / onStepMs / onStepState callbacks', async () => {
     const clock = makeFakeClock()
-    const realPromise = Promise.reject(new Error('boom'))
+    const { events, callbacks } = recordEvents(clock)
+    let rejectReal: (err: Error) => void = () => undefined
+    const realPromise = new Promise<{
+      retriever: number
+      reranker: number
+      generator: number
+    }>((_, rej) => {
+      rejectReal = rej
+    })
 
     const done = runPipelineAnimation({
       realTimings: realPromise,
       now: () => clock.now(),
       setTimeoutFn: clock.setTimeoutFn,
       clearTimeoutFn: clock.clearTimeoutFn,
-      callbacks: {
-        onStepState: () => undefined,
-        onStepMs: () => undefined,
-        onBridgeState: () => undefined,
-        onTotalMs: () => undefined,
-      },
+      callbacks,
     })
 
-    clock.advanceTo(500)
+    // Walk to t=2000, then reject.
+    for (let t = 0; t <= 2000; t += 100) {
+      clock.advanceTo(t)
+      await tick()
+    }
+    rejectReal(new Error('boom'))
     await expect(done).rejects.toThrow(/boom/)
+
+    const countsAtRejection = {
+      total: events.totalMs.length,
+      stepMs: events.stepMs.length,
+      stepStates: events.stepStates.length,
+      bridges: events.bridges.length,
+    }
+    // Walk further; no new callbacks should fire.
+    for (let t = 2000; t <= 4000; t += 100) {
+      clock.advanceTo(t)
+      await tick()
+    }
+    expect(events.totalMs.length).toBe(countsAtRejection.total)
+    expect(events.stepMs.length).toBe(countsAtRejection.stepMs)
+    expect(events.stepStates.length).toBe(countsAtRejection.stepStates)
+    expect(events.bridges.length).toBe(countsAtRejection.bridges)
   })
 })

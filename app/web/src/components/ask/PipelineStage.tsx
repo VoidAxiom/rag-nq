@@ -6,7 +6,9 @@ interface PipelineStageProps {
   name: string
   accent: 1 | 2 | 3
   state: StepState
-  /** Milliseconds to display. null → show em-dash. */
+  /** Milliseconds to display. Ignored while state==='running' (the formatter
+   * intentionally suppresses any numeric attribution before the real timing
+   * lands, to avoid misattributing wall-clock time to the wrong stage). */
   ms: number | null
   /** Knobs row inside the step body. */
   children?: ReactNode
@@ -37,9 +39,14 @@ export function PipelineStage({ name, accent, state, ms, children }: PipelineSta
 }
 
 function formatMs(ms: number | null, state: StepState): string {
-  if (ms === null) {
-    return state === 'pending' ? '—' : '0 ms'
-  }
-  const suffix = state === 'running' ? ' ms…' : ' ms'
-  return `${Math.round(ms)}${suffix}`
+  // Pending: nothing to show.
+  if (state === 'pending') return '—'
+  // Running: the cascade is animating but no real ms is known yet. Show a
+  // neutral indicator with NO number — attributing wall-clock to a specific
+  // step before the API responds is a lie (cf. VOI-368 user feedback).
+  if (state === 'running') return '…'
+  // Complete: snap to the real ms.
+  if (ms === null) return '0 ms'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`
+  return `${Math.round(ms)} ms`
 }
