@@ -148,7 +148,13 @@ def _duplicate_alias(hit: PassageHit) -> DuplicateAlias:
 
 
 def build_default_cross_encoder(model_name: str) -> CrossEncoderLike:
-    """Load the configured local cross-encoder lazily."""
+    """Load the configured local cross-encoder lazily.
+
+    Apple Silicon (MPS available) gets device="mps" + torch_dtype=float16,
+    matching the embedder routing in src/retrieval/dense_index.py. On
+    non-Apple platforms (or when torch / MPS is unavailable), falls back
+    to the unchanged bare CrossEncoder(model_name).
+    """
 
     try:
         from sentence_transformers import CrossEncoder
@@ -156,4 +162,25 @@ def build_default_cross_encoder(model_name: str) -> CrossEncoderLike:
         raise RuntimeError(
             "sentence-transformers is required for reranking. Install project dependencies first."
         ) from exc
+
+    if _is_apple_silicon():
+        import torch
+
+        return CrossEncoder(
+            model_name,
+            device="mps",
+            model_kwargs={"torch_dtype": torch.float16},
+        )
+
     return CrossEncoder(model_name)
+
+
+def _is_apple_silicon() -> bool:
+    """Return True only when torch reports an available MPS backend."""
+
+    try:
+        import torch
+
+        return bool(torch.backends.mps.is_available())
+    except (ImportError, AttributeError):
+        return False
